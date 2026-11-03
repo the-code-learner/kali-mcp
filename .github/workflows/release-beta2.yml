@@ -1,0 +1,101 @@
+name: Publish validated beta v0.1.0-beta.2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release-beta2.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.repository == 'the-code-learner/kali-mcp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify version and release notes
+        run: |
+          test "$(cat VERSION)" = "0.1.0-beta.2"
+          test -s docs/BETA_RELEASE_NOTES.md
+          test -s LICENSE
+          test -s NOTICE
+      - name: Compile and test
+        run: |
+          python -m pip install -r requirements.txt pytest PyYAML
+          python -m compileall -q src scripts tests
+          pytest -q
+      - name: Prepare isolated Compose deployment
+        run: |
+          cp kali-mcp.yml kali-mcp-release-smoke.yml
+          echo "KALI_MCP_VERSION=$GITHUB_SHA" >> "$GITHUB_ENV"
+          echo "KALI_MCP_ADMIN_PASSWORD=CI_RELEASE_SMOKE_PASSWORD_2026_A7" >> "$GITHUB_ENV"
+          KALI_MCP_VERSION="$GITHUB_SHA" KALI_MCP_ADMIN_PASSWORD=CI_RELEASE_SMOKE_PASSWORD_2026_A7 docker compose -f kali-mcp-release-smoke.yml config --quiet
+      - name: Boot complete single-YAML appliance
+        run: docker compose -f kali-mcp-release-smoke.yml up -d --wait --wait-timeout 300
+      - name: Verify core and OAuth refusal
+        run: |
+          curl -fsS http://127.0.0.1:8787/healthz | python3 -m json.tool
+          result="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' http://127.0.0.1:8787/mcp)"
+          test "$result" = "401"
+      - name: Verify isolated Docker Python sandbox
+        run: |
+          docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
+          import sys
+          sys.path.insert(0, "/opt/kali-mcp/current/src")
+          from kali_mcp.broker_client import call
+          result = call("/run/kali-mcp/broker.sock", "execute", {
+              "mode": "sandbox", "language": "python",
+              "script": "print('beta-sandbox-ok')", "timeout": 30,
+          }, timeout=60)
+          assert result.get("exit_code") == 0, result
+          assert "beta-sandbox-ok" in result.get("stdout", ""), result
+          print("Sandbox smoke passed")
+          PY
+      - name: Verify OAuth PKCE and authenticated MCP tools/list via HTTP
+        env:
+          KALI_MCP_TEST_ADMIN_PASSWORD: "CI_RELEASE_SMOKE_PASSWORD_2026_A7"
+        run: python3 scripts/smoke_http.py
+      - name: Show debug logs if a check fails
+        if: failure()
+        run: |
+          docker compose -f kali-mcp-release-smoke.yml ps || true
+          docker compose -f kali-mcp-release-smoke.yml logs --tail=120 || true
+      - name: Stop and remove ephemeral test volumes
+        if: always()
+        run: docker compose -f kali-mcp-release-smoke.yml down -v --remove-orphans || true
+
+  publish:
+    needs: [validate]
+    if: github.repository == 'the-code-learner/kali-mcp'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Publish immutable prerelease and pinned YAML asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v0.1.0-beta.2
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists; refusing to overwrite"
+            exit 1
+          fi
+          gh release create "$TAG" ./kali-mcp.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Kali MCP v0.1.0-beta.2" \
+            --notes-file docs/BETA_RELEASE_NOTES.md \
+            --prerelease
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,tagName,isPrerelease
