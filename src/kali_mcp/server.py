@@ -175,18 +175,26 @@ def terminal_close(session_id: str) -> dict:
 @mcp.tool()
 def jobs_list(limit: int = 40) -> dict:
     """Read-only. List recent execution jobs and state transitions."""
-    return {"ok": True, "jobs": store.list_jobs(limit)}
+    own = actor()
+    return {"ok": True, "jobs": [j for j in store.list_jobs(min(max(limit * 3, 30), 500))
+                                 if j.get("actor") == own][:max(1, min(limit, 100))]}
 
 
 @mcp.tool()
 def jobs_get(job_id: str) -> dict:
     """Read-only. Return command results and audit-safe output for a completed job."""
+    record = store.get_job(job_id)
+    if not record or record["actor"] != actor():
+        return {"ok": False, "error": "Unknown job"}
     return jobs.status(job_id)
 
 
 @mcp.tool()
 def jobs_cancel(job_id: str) -> dict:
     """Request cancellation. Returns unavailable until broker process-tree cancellation lands."""
+    record = store.get_job(job_id)
+    if not record or record["actor"] != actor():
+        return {"ok": False, "error": "Unknown job"}
     return jobs.cancel(job_id)
 
 
@@ -229,4 +237,7 @@ def updates_install(tag: str) -> dict:
 @mcp.tool()
 def audit_recent(limit: int = 50) -> dict:
     """Read-only. Return bounded redacted authorization and job audit events."""
-    return {"ok": True, "events": store.list_audit(limit)}
+    return {"ok": True, "events": [
+        row for row in store.list_audit(min(max(limit * 3, 30), 500))
+        if row.get("actor") == actor()
+    ][:max(1, min(limit, 100))]}
