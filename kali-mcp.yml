@@ -1,14 +1,15 @@
 # Kali MCP — SINGLE YAML BETA DEPLOYMENT
-# Edit KALI_MCP_ADMIN_PASSWORD and KALI_MCP_PUBLIC_URL before deploying.
-# This is an experimental privileged host-control stack; review security docs.
+# Portainer: Git repository -> set KALI_MCP_ADMIN_PASSWORD in Stack environment variables.
+# Inline bootstrap downloads source from GitHub Releases; no curl, nano or host scripts required.
+# Experimental privileged broker: use a dedicated lab machine and review security docs.
 services:
   kali-mcp-bootstrap:
     image: python:3.12-slim-bookworm
     restart: "no"
     environment:
       KALI_MCP_REPO: "the-code-learner/kali-mcp"
-      KALI_MCP_VERSION: "latest" # Select the newest stable or beta release
-      KALI_MCP_RELEASE_CHANNEL: "beta" # stable or beta
+      KALI_MCP_VERSION: "${KALI_MCP_VERSION:-latest}" # stable or beta chosen by release channel
+      KALI_MCP_RELEASE_CHANNEL: "${KALI_MCP_RELEASE_CHANNEL:-beta}" # stable or beta
     volumes:
       - kali_mcp_source:/opt/kali-mcp
       - kali_mcp_data:/data
@@ -197,12 +198,12 @@ services:
     environment:
       TZ: Europe/Rome
       PYTHONUNBUFFERED: "1"
-      KALI_MCP_PUBLIC_URL: "http://localhost:8787" # set HTTPS public URL for OAuth
-      KALI_MCP_HOST_USER: "kali"
-      KALI_MCP_ALLOW_HOST_EXEC: "false" # hard ceiling
-      KALI_MCP_ALLOW_HOST_ROOT: "false" # hard ceiling; require explicit opt-in
-      KALI_MCP_ALLOW_PACKAGE_INSTALL: "false"
-      KALI_MCP_ALLOW_NETWORK_CHANGES: "false"
+      KALI_MCP_PUBLIC_URL: "${KALI_MCP_PUBLIC_URL:-http://localhost:8787}" # HTTPS origin for remote OAuth
+      KALI_MCP_HOST_USER: "${KALI_MCP_HOST_USER:-kali}"
+      KALI_MCP_ALLOW_HOST_EXEC: "${KALI_MCP_ALLOW_HOST_EXEC:-false}" # hard ceiling
+      KALI_MCP_ALLOW_HOST_ROOT: "${KALI_MCP_ALLOW_HOST_ROOT:-false}" # explicit opt-in
+      KALI_MCP_ALLOW_PACKAGE_INSTALL: "${KALI_MCP_ALLOW_PACKAGE_INSTALL:-false}"
+      KALI_MCP_ALLOW_NETWORK_CHANGES: "${KALI_MCP_ALLOW_NETWORK_CHANGES:-false}"
       KALI_MCP_MAX_JOB_SECONDS: "300"
       KALI_MCP_BROKER_SOCKET: "/run/kali-mcp/broker.sock"
       KALI_MCP_SANDBOX_IMAGE: "python:3.12-slim-bookworm"
@@ -245,19 +246,19 @@ services:
       PYTHONDONTWRITEBYTECODE: "1"
       MCP_HOST: "0.0.0.0"
       MCP_PORT: "8000"
-      KALI_MCP_PUBLIC_URL: "http://localhost:8787" # change to https://kali.example.com
-      KALI_MCP_ADMIN_PASSWORD: "" # REQUIRED: set strong 16+ character private password
+      KALI_MCP_PUBLIC_URL: "${KALI_MCP_PUBLIC_URL:-http://localhost:8787}" # configure HTTPS via Portainer variable
+      KALI_MCP_ADMIN_PASSWORD: "${KALI_MCP_ADMIN_PASSWORD:?Define KALI_MCP_ADMIN_PASSWORD in Portainer Stack variables (16+ characters)}"
       KALI_MCP_REPO: "the-code-learner/kali-mcp"
-      KALI_MCP_RELEASE_CHANNEL: "beta"
-      KALI_MCP_UPDATE_CHECK_SECONDS: "21600"
-      KALI_MCP_ALLOWED_CIDRS: "127.0.0.1/32"
-      KALI_MCP_ALLOW_HOST_EXEC: "false" # hard ceiling
-      KALI_MCP_ALLOW_HOST_ROOT: "false"
+      KALI_MCP_RELEASE_CHANNEL: "${KALI_MCP_RELEASE_CHANNEL:-beta}"
+      KALI_MCP_UPDATE_CHECK_SECONDS: "${KALI_MCP_UPDATE_CHECK_SECONDS:-21600}"
+      KALI_MCP_ALLOWED_CIDRS: "${KALI_MCP_ALLOWED_CIDRS:-127.0.0.1/32}"
+      KALI_MCP_ALLOW_HOST_EXEC: "${KALI_MCP_ALLOW_HOST_EXEC:-false}" # hard ceiling
+      KALI_MCP_ALLOW_HOST_ROOT: "${KALI_MCP_ALLOW_HOST_ROOT:-false}"
       KALI_MCP_ALLOW_PACKAGE_INSTALL: "false"
       KALI_MCP_ALLOW_NETWORK_CHANGES: "false"
-      KALI_MCP_ALLOW_MCP_HOST_EXEC: "false"
-      KALI_MCP_ALLOW_MCP_ROOT: "false"
-      KALI_MCP_ALLOW_MCP_UPDATES: "false"
+      KALI_MCP_ALLOW_MCP_HOST_EXEC: "${KALI_MCP_ALLOW_MCP_HOST_EXEC:-false}"
+      KALI_MCP_ALLOW_MCP_ROOT: "${KALI_MCP_ALLOW_MCP_ROOT:-false}"
+      KALI_MCP_ALLOW_MCP_UPDATES: "${KALI_MCP_ALLOW_MCP_UPDATES:-false}"
       KALI_MCP_MAX_JOB_SECONDS: "300"
       KALI_MCP_BROKER_SOCKET: "/run/kali-mcp/broker.sock"
     command: ["/bin/sh", "/opt/kali-mcp/current/scripts/start.sh"]
