@@ -153,3 +153,34 @@ def test_runtime_oauth_gate(initialized):
     assert "resource_metadata=" in response.headers["www-authenticate"]
     assert client.get("/.well-known/oauth-authorization-server").status_code == 200
     assert client.get("/", follow_redirects=False).status_code == 303
+    # The same origin is protected by a separate administrator login.
+    login = client.post("/login", data={"password": "LONG_TEST_ADMIN_PASSWORD_12345678", "next": "/"},
+                        follow_redirects=False)
+    assert login.status_code == 303
+    dashboard = client.get("/")
+    assert dashboard.status_code == 200
+    assert "Execution capabilities" in dashboard.text
+    from re import search
+    csrf_match = search(r'name="csrf" value="([^"]+)"', dashboard.text)
+    assert csrf_match
+    csrf = csrf_match.group(1)
+    # Host execution can be enabled independently of MCP root privileges.
+    enabled = client.post("/api/v1/settings", data={
+        "csrf": csrf, "feature": "host_exec", "enabled": "true"}, follow_redirects=False)
+    assert enabled.status_code == 303
+    assert initialized[1].get_setting("host_exec")
+    # Disclaimers are mandatory when enabling root.
+    denied = client.post("/api/v1/settings", data={
+        "csrf": csrf, "feature": "host_root", "enabled": "true"}, follow_redirects=False)
+    assert denied.status_code == 400
+    assert not initialized[1].get_setting("host_root")
+    accepted = client.post("/api/v1/settings", data={
+        "csrf": csrf, "feature": "host_root", "enabled": "true", "disclaimer": "yes"},
+        follow_redirects=False)
+    assert accepted.status_code == 303
+    assert initialized[1].get_setting("host_root")
+    no_csrf = client.post("/api/v1/settings", data={
+        "csrf": "wrong", "feature": "host_root", "enabled": "false"},
+        follow_redirects=False)
+    assert no_csrf.status_code == 403
+    assert initialized[1].get_setting("host_root")
