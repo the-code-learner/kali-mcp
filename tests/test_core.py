@@ -152,4 +152,4 @@ def test_runtime_oauth_gate(initialized):
     assert response.status_code == 401
     assert "resource_metadata=" in response.headers["www-authenticate"]
     assert client.get("/.well-known/oauth-authorization-server").status_code == 200
-    assert client.get("/").status_code == 303
+    assert client.get("/", follow_redirects=False).status_code == 303
