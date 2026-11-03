@@ -1,0 +1,42 @@
+name: Verify pinned beta release asset
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/tagged-beta-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  beta-asset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download exact published beta YAML
+        run: |
+          curl -fsSL https://github.com/the-code-learner/kali-mcp/releases/download/v0.1.0-beta.1/kali-mcp.yml -o kali-mcp-tagged.yml
+          grep -q 'KALI_MCP_VERSION: "latest"' kali-mcp-tagged.yml
+          grep -q 'KALI_MCP_RELEASE_CHANNEL: "beta"' kali-mcp-tagged.yml
+          sed -i 's/KALI_MCP_ADMIN_PASSWORD: ""/KALI_MCP_ADMIN_PASSWORD: "CI_TAGGED_BETA_VERIFY_PASSWORD_2026"/' kali-mcp-tagged.yml
+          docker compose -f kali-mcp-tagged.yml config --quiet
+      - name: Boot exact published beta without modifying version selector
+        run: docker compose -f kali-mcp-tagged.yml up -d --wait --wait-timeout 300
+      - name: Assert tag selection, HTTP auth and full OAuth tool listing
+        env:
+          KALI_MCP_TEST_ADMIN_PASSWORD: "CI_TAGGED_BETA_VERIFY_PASSWORD_2026"
+        run: |
+          test "$(docker exec kali-mcp-core cat /opt/kali-mcp/current/.source-ready)" = "v0.1.0-beta.1"
+          curl -fsS http://127.0.0.1:8787/healthz | python3 -m json.tool
+          python3 scripts/smoke_http.py
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker compose -f kali-mcp-tagged.yml ps || true
+          docker compose -f kali-mcp-tagged.yml logs --tail=120 || true
+      - name: Cleanup
+        if: always()
+        run: docker compose -f kali-mcp-tagged.yml down -v --remove-orphans || true
