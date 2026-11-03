@@ -175,9 +175,7 @@ def terminal_close(session_id: str) -> dict:
 @mcp.tool()
 def jobs_list(limit: int = 40) -> dict:
     """Read-only. List recent execution jobs and state transitions."""
-    own = actor()
-    return {"ok": True, "jobs": [j for j in store.list_jobs(min(max(limit * 3, 30), 500))
-                                 if j.get("actor") == own][:max(1, min(limit, 100))]}
+    return {"ok": True, "jobs": store.list_jobs(limit, actor=actor())}
 
 
 @mcp.tool()
@@ -237,7 +235,4 @@ def updates_install(tag: str) -> dict:
 @mcp.tool()
 def audit_recent(limit: int = 50) -> dict:
     """Read-only. Return bounded redacted authorization and job audit events."""
-    return {"ok": True, "events": [
-        row for row in store.list_audit(min(max(limit * 3, 30), 500))
-        if row.get("actor") == actor()
-    ][:max(1, min(limit, 100))]}
+    return {"ok": True, "events": store.list_audit(limit, actor=actor())}
