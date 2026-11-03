@@ -13,3 +13,5 @@ The current merge-base also exercises per-client isolation for persistent jobs a
 OAuth regression coverage now verifies token-family revocation after refresh-token replay.
 
 The latest merge checks OAuth replay revocation and HTML escaping of job output.
+
+The latest check also covers bounded, valid JSON for long scanner outputs and traces.
