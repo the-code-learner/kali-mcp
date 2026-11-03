@@ -1,0 +1,44 @@
+name: Verify published Portainer beta.2 YAML
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/tagged-beta2-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  beta-portainer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KALI_MCP_ADMIN_PASSWORD: "CI_PORTAINER_BETA2_PASSWORD_2026"
+      KALI_MCP_TEST_ADMIN_PASSWORD: "CI_PORTAINER_BETA2_PASSWORD_2026"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Retrieve immutable release asset and validate unchanged Compose
+        run: |
+          curl -fsSL https://github.com/the-code-learner/kali-mcp/releases/download/v0.1.0-beta.2/kali-mcp.yml -o kali-mcp-tagged.yml
+          grep -q 'KALI_MCP_VERSION: "${KALI_MCP_VERSION:-latest}"' kali-mcp-tagged.yml
+          grep -q 'KALI_MCP_RELEASE_CHANNEL: "${KALI_MCP_RELEASE_CHANNEL:-beta}"' kali-mcp-tagged.yml
+          grep -q 'KALI_MCP_ADMIN_PASSWORD: "${KALI_MCP_ADMIN_PASSWORD:?' kali-mcp-tagged.yml
+          docker compose -f kali-mcp-tagged.yml config --quiet
+      - name: Boot released YAML directly with Stack environment
+        run: docker compose -f kali-mcp-tagged.yml up -d --wait --wait-timeout 300
+      - name: Verify latest beta selected and OAuth MCP works
+        run: |
+          test "$(docker exec kali-mcp-core cat /opt/kali-mcp/current/.source-ready)" = "v0.1.0-beta.2"
+          curl -fsS http://127.0.0.1:8787/healthz | python3 -m json.tool
+          python3 scripts/smoke_http.py
+      - name: Diagnostics
+        if: failure()
+        run: |
+          docker compose -f kali-mcp-tagged.yml ps || true
+          docker compose -f kali-mcp-tagged.yml logs --tail=120 || true
+      - name: Cleanup
+        if: always()
+        run: docker compose -f kali-mcp-tagged.yml down -v --remove-orphans || true
