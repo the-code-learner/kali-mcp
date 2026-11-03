@@ -1,38 +1,46 @@
-# Kali MCP v0.1.0-beta.1
+# Kali MCP v0.1.0-beta.2 — Portainer single-YAML deployment
 
-**First installable prerelease for isolated Kali Linux lab testing.**
+This prerelease updates the deployment workflow to match Postmaster MCP.
 
-## Included
+## Install directly from Portainer
 
-- Postmaster-style, single-file Compose bootstrap with versioned GitHub source cache and persistent Python environments.
-- `stable` and `beta` release channels, with periodic metadata checks (no automatic upgrades).
-- Non-root MCP + WebUI service, private Unix-socket broker, privileged host mode disabled by default.
-- OAuth authorization-code + PKCE S256, client registration, Bearer enforcement, browser admin consent and hashed, rotatable tokens.
-- WebUI admin login, capability toggles, root disclaimer, live job status, human-readable job reports and bounded audit history.
-- Initial Kali adapter catalog and tightly scoped typed actions; basic read-only network status/scan.
-- Experimental Python/Bash Docker sandbox, resource limits and no sandbox network access.
-- CI coverage for authorization policies, OAuth exchange, release selection, source extraction, Compose parsing and integration tests.
+1. **Stacks → Add stack → Git repository**.
+2. Repository: `https://github.com/the-code-learner/kali-mcp`.
+3. Reference: `refs/tags/v0.1.0-beta.2`.
+4. Compose file: `kali-mcp.yml`.
+5. In **Environment variables** set `KALI_MCP_ADMIN_PASSWORD` to a unique password of 16+ characters.
+6. Click **Deploy the stack**.
 
-## Installation
+No terminal command, YAML download or text editor is necessary. The Python
+bootstrap is embedded **directly in the YAML** and downloads the latest
+GitHub Release appropriate for the selected channel.
 
-Use the YAML pinned to this release:
+Optional Portainer variables: `KALI_MCP_RELEASE_CHANNEL=beta` (default),
+`KALI_MCP_PUBLIC_URL=https://your.example.com` for Cloudflare OAuth,
+`KALI_MCP_VERSION=latest` (default), and disabled-by-default permission
+ceilings such as `KALI_MCP_ALLOW_HOST_ROOT`.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/the-code-learner/kali-mcp/v0.1.0-beta.1/kali-mcp.yml -o kali-mcp.yml
-```
+## Changes since beta.1
 
-Edit `KALI_MCP_ADMIN_PASSWORD` (unique 16+ characters) and, for remote OAuth, `KALI_MCP_PUBLIC_URL` in **Core and Broker**, then:
+- Replaced blank hard-coded administrator password in the Compose file with
+  mandatory Portainer Stack interpolation.
+- Introduced Portainer variables for release channel, version pin, public
+  URL and host/privilege ceilings.
+- Kept the validated GitHub Release download, checked source archive extraction,
+  cached version and persistent data/virtualenv bootstrap **inside** the
+  single Compose YAML.
+- Documented Git-repository and Web editor deployment instead of
+  curl/nano-based installation.
 
-```sh
-docker compose -f kali-mcp.yml up -d --wait
-```
+## Safety and feature scope
 
-The default browser URL is `http://127.0.0.1:8787` on the Pi itself. Other machines can use SSH local port forwarding; for Cloudflare Tunnel point the origin to `http://127.0.0.1:8787` and follow [OAuth/Access policy documentation](https://github.com/the-code-learner/kali-mcp/blob/v0.1.0-beta.1/docs/CLOUDFLARE.md).
+All previous beta capabilities remain: OAuth PKCE and MCP discovery, WebUI,
+bounded jobs/results, initial Kali registry and Docker sandbox. The broker
+is privileged and effectively host-root; its WebUI toggle is an application
+authorization control and not host isolation.
 
-Complete instructions and caveats: [docs/BETA.md](https://github.com/the-code-learner/kali-mcp/blob/v0.1.0-beta.1/docs/BETA.md).
+This is still **experimental**. Real Raspberry Pi 5/Kali ARM64 verification,
+Cloudflare Access setup, hardware Wi-Fi/Nexmon, host root and the in-app
+upgrade/rollback engine remain outstanding. Run only on a dedicated lab Pi.
 
-## Known limits
-
-**Experimental; not production hardened.** Root/host commands are exposed only after explicit YAML and admin toggles, but the privileged Docker broker itself already has effective host-level authority. Hardware-specific networking (Wi-Fi AP, Ethernet gateway/NAT, Nexmon), safe checkpoint rollback, full module installation and process cancellation are not complete. The periodic update scan does **not** install releases; manual in-app install/rollback is not implemented in beta. OAuth/Cloudflare compatibility needs testing on the actual Cloudflare zone and MCP client. This initial beta should only run on a dedicated test Pi/Kali host.
-
-Do not enable host root, expose the MCP publicly or scan third-party networks before completing the relevant authorization and security checks.
+See [beta installation guide](https://github.com/the-code-learner/kali-mcp/blob/v0.1.0-beta.2/docs/BETA.md).
