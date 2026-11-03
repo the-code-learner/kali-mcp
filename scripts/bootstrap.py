@@ -117,6 +117,13 @@ def prepare(repo: str, version: str, channel: str, root: Path) -> str:
     if tmp.exists() or tmp.is_symlink():
         tmp.unlink()
     tmp.symlink_to(target)
+    # Docker may pre-create a service working directory in the mounted source
+    # volume before the bootstrap job has run. Only remove an EMPTY placeholder.
+    if current.exists() and not current.is_symlink():
+        if current.is_dir() and not any(current.iterdir()):
+            current.rmdir()
+        else:
+            raise RuntimeError("Refusing to replace non-empty current directory")
     tmp.replace(current)
     return ref
 
