@@ -1,0 +1,269 @@
+# Kali MCP — SINGLE YAML DEVELOPMENT DEPLOYMENT
+# Edit KALI_MCP_ADMIN_PASSWORD and KALI_MCP_PUBLIC_URL before deploying.
+# This is an experimental privileged host-control stack; review security docs.
+services:
+  kali-mcp-bootstrap:
+    image: python:3.12-slim-bookworm
+    restart: "no"
+    environment:
+      KALI_MCP_REPO: "the-code-learner/kali-mcp"
+      KALI_MCP_VERSION: "main" # change to "latest" after first stable/beta release
+      KALI_MCP_RELEASE_CHANNEL: "stable" # stable or beta
+    volumes:
+      - kali_mcp_source:/opt/kali-mcp
+      - kali_mcp_data:/data
+      - kali_mcp_core_venv:/opt/venv
+    command:
+      - python
+      - -c
+      - |
+        """Safe Postmaster-style GitHub source cache bootstrap.
+        
+        This file is also the reference implementation of the inline Compose bootstrap.
+        It is not executed until a source archive has already been downloaded.
+        """
+        from __future__ import annotations
+        
+        import io
+        import json
+        import os
+        from pathlib import Path, PurePosixPath
+        import re
+        import shutil
+        import stat
+        import tarfile
+        import urllib.parse
+        import urllib.request
+        
+        
+        REF_RE = re.compile(r"^(?:main|[0-9a-f]{40}|v[0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+)?)$")
+        REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+        
+        
+        def latest(repo: str, channel: str) -> str:
+            if channel not in {"stable", "beta"}:
+                raise ValueError("Invalid release channel")
+            url = f"https://api.github.com/repos/{repo}/releases?per_page=100"
+            with urllib.request.urlopen(urllib.request.Request(url, headers={
+                "Accept": "application/vnd.github+json", "User-Agent": "Kali-MCP-bootstrap"}), timeout=20) as response:
+                releases = json.load(response)
+            versions = []
+            for release in releases:
+                tag = str(release.get("tag_name") or "")
+                m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:-beta\.(\d+))?", tag)
+                if not m or release.get("draft"):
+                    continue
+                prerelease = bool(release.get("prerelease")) or m.group(4) is not None
+                if channel == "stable" and prerelease:
+                    continue
+                versions.append(((int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                                  0 if prerelease else 1, int(m.group(4) or 0)), tag))
+            if not versions:
+                raise RuntimeError(f"No {channel} releases; pin main for development only")
+            return max(versions)[1]
+        
+        
+        def safe_extract(data: bytes, staging: Path) -> None:
+            if len(data) > 64 * 1024 * 1024:
+                raise RuntimeError("Source archive exceeds 64 MiB")
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
+                members = archive.getmembers()
+                if len(members) > 5000:
+                    raise RuntimeError("Archive contains too many members")
+                roots = {m.name.split("/", 1)[0] for m in members if m.name}
+                if len(roots) != 1:
+                    raise RuntimeError("Invalid archive root")
+                root = next(iter(roots))
+                for member in members:
+                    if member.name == root:
+                        continue
+                    pure = PurePosixPath(member.name)
+                    if not pure.parts or pure.parts[0] != root or pure.is_absolute() or ".." in pure.parts:
+                        raise RuntimeError("Unsafe archive path")
+                    if member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
+                        raise RuntimeError("Archive contains unsupported link or special file")
+                    path = staging.joinpath(*pure.parts[1:])
+                    if member.isdir():
+                        path.mkdir(parents=True, exist_ok=True)
+                    else:
+                        if member.size > 8 * 1024 * 1024:
+                            raise RuntimeError("Oversized source member")
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        src = archive.extractfile(member)
+                        if src is None:
+                            raise RuntimeError("Unreadable archive member")
+                        with src, path.open("wb") as out:
+                            shutil.copyfileobj(src, out)
+                        if member.mode & stat.S_IXUSR:
+                            path.chmod(0o755)
+        
+        
+        def prepare(repo: str, version: str, channel: str, root: Path) -> str:
+            if not REPO_RE.fullmatch(repo):
+                raise ValueError("Invalid repository")
+            if version == "latest":
+                ref = latest(repo, channel)
+            else:
+                ref = version
+            if not REF_RE.fullmatch(ref):
+                raise ValueError("Invalid revision: use main, vX.Y.Z(-beta.N) or full SHA")
+            current = root / "current"
+            target = root / "releases" / ref
+            root.mkdir(exist_ok=True, parents=True)
+            target.parent.mkdir(exist_ok=True)
+            if not (target / ".source-ready").exists():
+                staging = root / "releases" / (".staging-" + ref + "-" + str(os.getpid()))
+                if staging.exists():
+                    shutil.rmtree(staging)
+                staging.mkdir()
+                url = f"https://codeload.github.com/{repo}/tar.gz/{urllib.parse.quote(ref, safe='')}"
+                try:
+                    with urllib.request.urlopen(url, timeout=60) as response:
+                        data = response.read(64 * 1024 * 1024 + 1)
+                    safe_extract(data, staging)
+                    if not (staging / "scripts" / "start.sh").exists():
+                        raise RuntimeError("Missing entrypoint")
+                    (staging / ".source-ready").write_text(ref + "\n", encoding="utf-8")
+                    staging.rename(target)
+                except BaseException:
+                    shutil.rmtree(staging, ignore_errors=True)
+                    if not (target / ".source-ready").exists():
+                        raise
+            tmp = root / (".current-" + str(os.getpid()))
+            if tmp.exists() or tmp.is_symlink():
+                tmp.unlink()
+            tmp.symlink_to(target)
+            tmp.replace(current)
+            return ref
+        
+        
+        def main() -> None:
+            repo = os.getenv("KALI_MCP_REPO", "the-code-learner/kali-mcp")
+            version = os.getenv("KALI_MCP_VERSION", "latest")
+            channel = os.getenv("KALI_MCP_RELEASE_CHANNEL", "stable")
+            root = Path(os.getenv("KALI_MCP_SOURCE_ROOT", "/opt/kali-mcp"))
+            current = root / "current"
+            # Existing deployments are pinned until an administrator installs a
+            # new release; startup only repairs missing source, it does not upgrade.
+            if current.is_symlink() and (current / ".source-ready").is_file():
+                print("Using previously installed release:", (current / ".source-ready").read_text().strip())
+                return
+            try:
+                print("Prepared release:", prepare(repo, version, channel, root))
+            except Exception as exc:
+                if current.is_symlink() and (current / ".source-ready").is_file():
+                    print("Source refresh failed; preserved current release", exc)
+                    return
+                raise
+        
+        
+        if __name__ == "__main__":
+            main()
+        
+        # Prepare persistent non-root application directories.
+        from pathlib import Path
+        for folder in (Path('/data'),Path('/opt/venv')):
+            folder.mkdir(parents=True,exist_ok=True)
+            import os
+            os.chown(folder,10001,10001)
+            os.chmod(folder,0o750)
+        
+
+  kali-mcp-broker:
+    image: python:3.12-slim-bookworm
+    container_name: kali-mcp-broker
+    restart: unless-stopped
+    depends_on:
+      kali-mcp-bootstrap:
+        condition: service_completed_successfully
+    privileged: true # requested host authority; do NOT put privileges on the core
+    pid: host
+    working_dir: /opt/kali-mcp/current
+    volumes:
+      - kali_mcp_source:/opt/kali-mcp:ro
+      - kali_mcp_data:/data
+      - kali_mcp_broker_venv:/opt/broker-venv
+      - kali_mcp_socket:/run/kali-mcp
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      TZ: Europe/Rome
+      PYTHONUNBUFFERED: "1"
+      KALI_MCP_PUBLIC_URL: "http://localhost:8787" # set HTTPS public URL for OAuth
+      KALI_MCP_HOST_USER: "kali"
+      KALI_MCP_ALLOW_HOST_EXEC: "false" # hard ceiling
+      KALI_MCP_ALLOW_HOST_ROOT: "false" # hard ceiling; require explicit opt-in
+      KALI_MCP_ALLOW_PACKAGE_INSTALL: "false"
+      KALI_MCP_ALLOW_NETWORK_CHANGES: "false"
+      KALI_MCP_MAX_JOB_SECONDS: "300"
+      KALI_MCP_BROKER_SOCKET: "/run/kali-mcp/broker.sock"
+      KALI_MCP_SANDBOX_IMAGE: "python:3.12-slim-bookworm"
+    command: ["/bin/sh", "/opt/kali-mcp/current/scripts/broker-start.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/kali-mcp/broker.sock"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 150s
+
+  kali-mcp-core:
+    image: python:3.12-slim-bookworm
+    container_name: kali-mcp-core
+    restart: unless-stopped
+    depends_on:
+      kali-mcp-bootstrap:
+        condition: service_completed_successfully
+      kali-mcp-broker:
+        condition: service_healthy
+    user: "10001:10001"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+    working_dir: /opt/kali-mcp/current
+    ports:
+      - "127.0.0.1:8787:8000" # Tunnel origin; change to LAN IP to enable LAN browsing
+    volumes:
+      - kali_mcp_source:/opt/kali-mcp:ro
+      - kali_mcp_core_venv:/opt/venv
+      - kali_mcp_data:/data
+      - kali_mcp_socket:/run/kali-mcp:ro
+    environment:
+      TZ: Europe/Rome
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+      KALI_MCP_PUBLIC_URL: "http://localhost:8787" # change to https://kali.example.com
+      KALI_MCP_ADMIN_PASSWORD: "" # REQUIRED: set strong 16+ character private password
+      KALI_MCP_REPO: "the-code-learner/kali-mcp"
+      KALI_MCP_RELEASE_CHANNEL: "stable"
+      KALI_MCP_UPDATE_CHECK_SECONDS: "21600"
+      KALI_MCP_ALLOWED_CIDRS: "127.0.0.1/32"
+      KALI_MCP_ALLOW_HOST_EXEC: "false" # hard ceiling
+      KALI_MCP_ALLOW_HOST_ROOT: "false"
+      KALI_MCP_ALLOW_PACKAGE_INSTALL: "false"
+      KALI_MCP_ALLOW_NETWORK_CHANGES: "false"
+      KALI_MCP_ALLOW_MCP_HOST_EXEC: "false"
+      KALI_MCP_ALLOW_MCP_ROOT: "false"
+      KALI_MCP_ALLOW_MCP_UPDATES: "false"
+      KALI_MCP_MAX_JOB_SECONDS: "300"
+      KALI_MCP_BROKER_SOCKET: "/run/kali-mcp/broker.sock"
+    command: ["/bin/sh", "/opt/kali-mcp/current/scripts/start.sh"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s=socket.create_connection(('127.0.0.1',8000),2); s.close()"
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 180s
+
+volumes:
+  kali_mcp_source:
+  kali_mcp_core_venv:
+  kali_mcp_broker_venv:
+  kali_mcp_data:
+  kali_mcp_socket:
