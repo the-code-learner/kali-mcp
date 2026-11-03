@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.sqlite*
+*.db
+.env
+data/
+dist/
+build/
+*.egg-info/
+.coverage
+artifacts/
+pcaps/
