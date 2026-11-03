@@ -21,9 +21,9 @@ jobs:
           test "${#REF}" -eq 40
           echo "Testing current main commit $REF"
           cp kali-mcp.yml kali-mcp-smoke.yml
-          sed -i 's/KALI_MCP_VERSION: "latest"/KALI_MCP_VERSION: "'"$REF"'"/' kali-mcp-smoke.yml
-          sed -i 's/KALI_MCP_ADMIN_PASSWORD: ""/KALI_MCP_ADMIN_PASSWORD: "CI_SANDBOX_ADMIN_TEST_PASSWORD_2026"/' kali-mcp-smoke.yml
-          docker compose -f kali-mcp-smoke.yml config --quiet
+          echo "KALI_MCP_VERSION=$REF" >> "$GITHUB_ENV"
+          echo "KALI_MCP_ADMIN_PASSWORD=CI_SANDBOX_ADMIN_TEST_PASSWORD_2026" >> "$GITHUB_ENV"
+          KALI_MCP_ADMIN_PASSWORD=CI_SANDBOX_ADMIN_TEST_PASSWORD_2026 KALI_MCP_VERSION="$REF" docker compose -f kali-mcp-smoke.yml config --quiet
       - name: Boot single-YAML appliance
         run: docker compose -f kali-mcp-smoke.yml up -d --wait --wait-timeout 300
       - name: Verify HTTP, discovery, and default-deny MCP
