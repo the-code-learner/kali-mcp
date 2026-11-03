@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import signal
 import re
 import select
 import shutil
@@ -61,16 +62,20 @@ class Broker:
 
     def _run(self, command: list[str], *, timeout: int = 60, input_bytes: bytes | None = None) -> dict:
         timeout = max(5, min(self.cfg.max_job_seconds, timeout))
+        proc = subprocess.Popen(command, stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        timed_out = False
         try:
-            completed = subprocess.run(command, input=input_bytes,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout,
-                check=False, start_new_session=True)
-            return {"ok": True, "exit_code": completed.returncode,
-                    "stdout": completed.stdout[:100000].decode("utf-8", "replace"),
-                    "stderr": completed.stderr[:100000].decode("utf-8", "replace"),
-                    "truncated": len(completed.stdout) > 100000 or len(completed.stderr) > 100000}
+            stdout, stderr = proc.communicate(input=input_bytes, timeout=timeout)
         except subprocess.TimeoutExpired:
-            return {"ok": True, "exit_code": 124, "timed_out": True, "stderr": "Job timed out"}
+            timed_out = True
+            os.killpg(proc.pid, signal.SIGKILL)
+            stdout, stderr = proc.communicate()
+        return {"ok": True, "exit_code": 124 if timed_out else proc.returncode,
+                "stdout": stdout[:100000].decode("utf-8", "replace"),
+                "stderr": stderr[:100000].decode("utf-8", "replace"),
+                "timed_out": timed_out,
+                "truncated": len(stdout) > 100000 or len(stderr) > 100000}
 
     def _sandbox(self, script: str, language: str, timeout: int) -> dict:
         if language not in {"python", "bash"}:
@@ -155,8 +160,9 @@ class Broker:
         return self._run(self._nsenter(argv, root=root), timeout=timeout)
 
     def _network(self, data: dict) -> dict:
-        self.require("network_changes", "allow_network_changes")
         action = str(data.get("action", ""))
+        if action not in {"scan", "status"}:
+            self.require("network_changes", "allow_network_changes")
         interface = str(data.get("interface", ""))
         if not re.fullmatch(r"[a-zA-Z0-9_.:-]{1,24}", interface):
             raise BrokerDenied("Invalid interface")
@@ -174,6 +180,9 @@ class Broker:
         if action == "terminal_open":
             self.require("host_exec", "allow_host_exec")
             root = data.get("root") is True
+            owner = str(data.get("actor") or "")
+            if not owner or len(owner) > 128:
+                raise BrokerDenied("Missing terminal owner")
             command = self._nsenter(["/bin/bash", "--noprofile", "--norc", "-i"], root=root)
             master, slave = pty.openpty()
             proc = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
@@ -182,13 +191,23 @@ class Broker:
             os.set_blocking(master, False)
             session_id = os.urandom(16).hex()
             with self.lock:
-                self.sessions[session_id] = {"master": master, "proc": proc, "last": time.monotonic()}
+                self.sessions[session_id] = {"master": master, "proc": proc, "last": time.monotonic(), "root": root, "actor": owner}
             return {"ok": True, "session_id": session_id, "pid": proc.pid}
         session_id = str(data.get("session_id", ""))
         with self.lock:
             session = self.sessions.get(session_id)
             if not session:
                 raise BrokerDenied("Unknown terminal session")
+            if str(data.get("actor") or "") != session["actor"]:
+                raise BrokerDenied("Terminal belongs to another client")
+            if action != "terminal_close":
+                try:
+                    self.require("host_exec", "allow_host_exec")
+                    if session["root"]:
+                        self.require("host_root", "allow_host_root")
+                except BrokerDenied:
+                    self._close_session(session_id, session)
+                    raise
             if time.monotonic() - session["last"] > SESSION_TTL:
                 self._close_session(session_id, session)
                 raise BrokerDenied("Terminal session expired")
@@ -276,6 +295,8 @@ def main():
     broker = Broker(cfg, store)
     socket_path = cfg.broker_socket
     socket_path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    os.chown(socket_path.parent, 10001, 10001)
+    os.chmod(socket_path.parent, 0o700)
     socket_path.unlink(missing_ok=True)
     with LocalServer(str(socket_path), Handler) as srv:
         srv.broker = broker
