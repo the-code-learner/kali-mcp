@@ -16,9 +16,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Configure isolated smoke deployment
-        env:
-          REF: ${{ github.event.pull_request.base.sha }}
         run: |
+          REF="$(git ls-remote https://github.com/the-code-learner/kali-mcp.git refs/heads/main | cut -f1)"
+          test "${#REF}" -eq 40
+          echo "Testing current main commit $REF"
           cp kali-mcp.yml kali-mcp-smoke.yml
           sed -i 's/KALI_MCP_VERSION: "latest"/KALI_MCP_VERSION: "'"$REF"'"/' kali-mcp-smoke.yml
           sed -i 's/KALI_MCP_ADMIN_PASSWORD: ""/KALI_MCP_ADMIN_PASSWORD: "CI_SANDBOX_ADMIN_TEST_PASSWORD_2026"/' kali-mcp-smoke.yml
