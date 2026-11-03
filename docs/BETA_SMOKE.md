@@ -7,3 +7,5 @@ Revalidating the reconstructed bootstrap header and live startup.
 Regression round: Docker-created workdir previously collided with current symlink; workaround fixed.
 
 Round: grant non-root Core write access to SQLite database and WAL files created by the privileged broker.
+
+Diagnostic rerun to inspect SQLite main/WAL/SHM ownership and Core volume writeability.
