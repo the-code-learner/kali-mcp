@@ -93,9 +93,15 @@ class Store:
         with self.lock:
             self._audit(actor, action, decision, detail)
 
-    def list_audit(self, limit: int = 100) -> list[dict]:
+    def list_audit(self, limit: int = 100, *, actor: str | None = None) -> list[dict]:
         with self.lock:
-            return [dict(x) for x in self.db.execute("SELECT * FROM audit ORDER BY at DESC LIMIT ?", (max(1, min(limit, 500)),))]
+            if actor is not None:
+                query = "SELECT * FROM audit WHERE actor=? ORDER BY at DESC LIMIT ?"
+                params = (actor, max(1, min(limit, 500)))
+            else:
+                query = "SELECT * FROM audit ORDER BY at DESC LIMIT ?"
+                params = (max(1, min(limit, 500)),)
+            return [dict(x) for x in self.db.execute(query, params)]
 
     def new_job(self, actor: str, tool_id: str, mode: str, args: dict) -> str:
         job_id = uuid4().hex
@@ -128,11 +134,16 @@ class Store:
             result["result"] = json.loads(result.pop("result_json")) if result.get("result_json") else None
             return result
 
-    def list_jobs(self, limit: int = 100) -> list[dict]:
+    def list_jobs(self, limit: int = 100, *, actor: str | None = None) -> list[dict]:
         with self.lock:
-            return [dict(x) for x in self.db.execute(
-                "SELECT id,at,finished_at,actor,tool_id,mode,state,exit_code FROM jobs ORDER BY at DESC LIMIT ?",
-                (max(1, min(limit, 500)),))]
+            fields = "id,at,finished_at,actor,tool_id,mode,state,exit_code"
+            if actor is not None:
+                query = f"SELECT {fields} FROM jobs WHERE actor=? ORDER BY at DESC LIMIT ?"
+                params = (actor, max(1, min(limit, 500)))
+            else:
+                query = f"SELECT {fields} FROM jobs ORDER BY at DESC LIMIT ?"
+                params = (max(1, min(limit, 500)),)
+            return [dict(x) for x in self.db.execute(query, params)]
 
     def events(self, after: int = 0, limit: int = 100) -> list[dict]:
         with self.lock:
