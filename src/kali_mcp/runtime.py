@@ -16,6 +16,7 @@ from starlette.routing import Mount, Route
 from . import server as core
 from .oauth import OAuth
 from .webui import Admin, UI
+from .telemetry import ToolCallObserver
 
 cfg, store = core.cfg, core.store
 oauth = OAuth(cfg, store)
@@ -122,7 +123,7 @@ app = SecurityGate(Starlette(
         Route("/api/v1/jobs/{job_id}", ui.job_detail, methods=["GET"]),
         Route("/api/v1/events", ui.events, methods=["GET"]),
         Route("/static/{name}", ui.static, methods=["GET"]),
-        Mount("/", app=_mcp_app),
+        Mount("/", app=ToolCallObserver(_mcp_app, store)),
     ],
     lifespan=lifespan,
 ))
