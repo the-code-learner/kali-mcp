@@ -18,3 +18,16 @@ def test_job_and_audit_views_are_actor_scoped(tmp_path):
     assert [x["detail"] for x in store.list_audit(actor="mcp:alpha")] == ["private-alpha"]
     assert [x["detail"] for x in store.list_audit(actor="mcp:beta")] == ["private-beta"]
     store.close()
+
+
+def test_long_tool_output_preserves_valid_json(tmp_path):
+    store = Store(tmp_path / "large.db")
+    job_id = store.new_job("mcp:alpha", "nmap", "host", {"argv": ["-x" * 5000]})
+    store.job_state(job_id, "completed", result={"ok": True,
+        "stdout": "A" * 100000, "stderr": "B" * 100000})
+    loaded = store.get_job(job_id)
+    assert loaded["args"]["truncated"] is True
+    assert loaded["result"]["truncated"] is True
+    assert len(loaded["result"]["stdout"]) == 24000
+    assert len(loaded["result"]["stderr"]) == 24000
+    store.close()
