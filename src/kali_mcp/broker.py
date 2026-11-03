@@ -309,6 +309,14 @@ class LocalServer(socketserver.ThreadingUnixStreamServer):
 def main():
     cfg = Config.from_env()
     store = Store(cfg.data_dir / "app.db")
+    # The privileged broker starts before the non-root Core. SQLite uses
+    # the main database plus WAL/SHM sidecars, all of which must be writable
+    # by Core uid 10001. Preserve ownership on every broker restart.
+    for suffix in ("", "-wal", "-shm"):
+        database_file = cfg.data_dir / ("app.db" + suffix)
+        if database_file.exists():
+            os.chown(database_file, 10001, 10001)
+            os.chmod(database_file, 0o660)
     broker = Broker(cfg, store)
     socket_path = cfg.broker_socket
     socket_path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
