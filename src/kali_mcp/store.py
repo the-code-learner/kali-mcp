@@ -150,6 +150,12 @@ class Store:
             return [dict(x) for x in self.db.execute(
                 "SELECT * FROM job_events WHERE id > ? ORDER BY id LIMIT ?", (max(0, after), max(1, min(limit, 500))),)]
 
+    def job_events(self, job_id: str, limit: int = 100) -> list[dict]:
+        with self.lock:
+            return [dict(x) for x in self.db.execute(
+                "SELECT * FROM job_events WHERE job_id=? ORDER BY id LIMIT ?",
+                (job_id, max(1, min(limit, 500))))]
+
     def close(self) -> None:
         with self.lock:
             self.db.close()
