@@ -17,7 +17,7 @@ jobs:
           persist-credentials: false
       - name: Configure isolated smoke deployment
         env:
-          REF: ${{ github.event.pull_request.head.sha }}
+          REF: ${{ github.event.pull_request.base.sha }}
         run: |
           cp kali-mcp.yml kali-mcp-smoke.yml
           sed -i 's/KALI_MCP_VERSION: "latest"/KALI_MCP_VERSION: "'"$REF"'"/' kali-mcp-smoke.yml
