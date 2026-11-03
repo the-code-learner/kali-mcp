@@ -188,9 +188,14 @@ class OAuth:
                 refresh = str(form.get("refresh_token", ""))
                 with self.store.transaction():
                     row = self.store.db.execute("SELECT * FROM oauth_tokens WHERE hash=? AND kind='refresh'", (digest(refresh),)).fetchone()
-                    if not row or row["revoked"] or row["expires"] < now or row["client_id"] != client_id or row["resource"] != resource:
+                    if row and row["revoked"]:
+                        # Reuse of a consumed refresh credential revokes every access
+                        # and refresh token in the same family.
+                        self.store.db.execute("UPDATE oauth_tokens SET revoked=1 WHERE family=?", (row["family"],))
+                        self.store._audit("oauth", "refresh.replay", "deny", row["client_id"])
                         return _err("invalid_grant")
-                    # Rotation and family revocation: a replay attempts to reuse a revoked refresh token.
+                    if not row or row["expires"] < now or row["client_id"] != client_id or row["resource"] != resource:
+                        return _err("invalid_grant")
                     self.store.db.execute("UPDATE oauth_tokens SET revoked=1 WHERE hash=?", (digest(refresh),))
                     family, scope = row["family"], row["scope"]
             else:
