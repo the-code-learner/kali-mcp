@@ -136,6 +136,13 @@ services:
             if tmp.exists() or tmp.is_symlink():
                 tmp.unlink()
             tmp.symlink_to(target)
+            # Docker may pre-create a service working directory in the mounted source
+            # volume before the bootstrap job has run. Only remove an EMPTY placeholder.
+            if current.exists() and not current.is_symlink():
+                if current.is_dir() and not any(current.iterdir()):
+                    current.rmdir()
+                else:
+                    raise RuntimeError("Refusing to replace non-empty current directory")
             tmp.replace(current)
             return ref
         
@@ -180,7 +187,7 @@ services:
         condition: service_completed_successfully
     privileged: true # requested host authority; do NOT put privileges on the core
     pid: host
-    working_dir: /opt/kali-mcp/current
+    working_dir: /opt/kali-mcp
     volumes:
       - kali_mcp_source:/opt/kali-mcp:ro
       - kali_mcp_data:/data
@@ -224,7 +231,7 @@ services:
     read_only: true
     tmpfs:
       - /tmp:rw,nosuid,nodev,size=64m
-    working_dir: /opt/kali-mcp/current
+    working_dir: /opt/kali-mcp
     ports:
       - "127.0.0.1:8787:8000" # Tunnel origin; change to LAN IP to enable LAN browsing
     volumes:
