@@ -16,6 +16,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest PyYAML
       - name: Validate single-file Compose syntax
+        env:
+          KALI_MCP_ADMIN_PASSWORD: CI_TEST_ONLY_ADMIN_PASSWORD_2026
         run: docker compose -f kali-mcp.yml config --quiet
       - name: Compile source
         run: python -m compileall -q src scripts tests
