@@ -2,9 +2,11 @@
 
 **Self-hosted Kali Linux MCP control plane with modular tools, network management, sandboxed execution, optional host execution and a live WebUI.**
 
-> **Status: v0.1.0-beta.1 — installable early beta, not production ready.** Full Docker Compose boot, OAuth client flow, protected MCP tool discovery and a Python sandbox smoke test passed on Linux AMD64. Kali Raspberry Pi 5 ARM64, host-root execution and Cloudflare Access have not yet been validated end to end.
+> **Status: v0.1.0-beta.2 — Portainer-ready early beta, not production ready.** Full Docker Compose boot, OAuth client flow, protected MCP tool discovery and a Python sandbox smoke test passed on Linux AMD64. Kali Raspberry Pi 5 ARM64, host-root execution and Cloudflare Access have not yet been validated end to end.
 
 **[Beta installation guide](docs/BETA.md)** · [single YAML](kali-mcp.yml) · [release notes](docs/BETA_RELEASE_NOTES.md) · [implementation status](docs/STATUS.md)
+
+**Installazione consigliata:** Portainer → **Stacks → Add stack → Git repository** → URL `https://github.com/the-code-learner/kali-mcp` → riferimento `refs/tags/v0.1.0-beta.2` → Compose `kali-mcp.yml`. Imposta `KALI_MCP_ADMIN_PASSWORD` nelle variabili dello Stack e premi Deploy. Lo YAML scarica autonomamente la release: non serve scaricare né modificare file sul Pi.
 
 ## Design targets
 
