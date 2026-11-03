@@ -55,6 +55,8 @@ jobs:
         run: |
           docker compose -f kali-mcp-smoke.yml ps || true
           docker compose -f kali-mcp-smoke.yml logs --tail=160 || true
+          docker exec kali-mcp-broker /bin/sh -c 'id; ls -land /data; ls -lan /data; stat -c "%a %u %g %n" /data /data/* 2>/dev/null || true' || true
+          docker exec kali-mcp-core /bin/sh -c 'id; ls -land /data; ls -lan /data; stat -c "%a %u %g %n" /data /data/* 2>/dev/null || true; touch /data/write_test || true' || true
       - name: Cleanup
         if: always()
         run: docker compose -f kali-mcp-smoke.yml down --volumes --remove-orphans || true
