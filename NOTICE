@@ -1,0 +1,21 @@
+Kali MCP
+
+Copyright 2026 the-code-learner
+
+Licensed under the Apache License, Version 2.0.
+See LICENSE for the complete license text.
+
+The project follows and may adapt the single-YAML bootstrap/deployment
+architecture originally developed for Postmaster MCP.
+
+--- Original Postmaster MCP attribution (preserved verbatim) ---
+
+Postmaster MCP
+
+Copyright 2026 the-code-learner
+
+Original project by the-code-learner.
+
+This attribution notice must be preserved in redistributed
+copies and derivative works in accordance with the
+Apache License 2.0.
