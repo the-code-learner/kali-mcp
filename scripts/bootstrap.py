@@ -51,6 +51,9 @@ def safe_extract(data: bytes, staging: Path) -> None:
         members = archive.getmembers()
         if len(members) > 5000:
             raise RuntimeError("Archive contains too many members")
+        total_bytes = sum(m.size for m in members if m.isfile())
+        if total_bytes > 96 * 1024 * 1024:
+            raise RuntimeError("Expanded source archive exceeds 96 MiB")
         roots = {m.name.split("/", 1)[0] for m in members if m.name}
         if len(roots) != 1:
             raise RuntimeError("Invalid archive root")
