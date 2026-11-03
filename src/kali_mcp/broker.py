@@ -171,7 +171,7 @@ class Broker:
         elif action == "status":
             argv = ["nmcli", "-t", "device", "show", interface]
         elif action == "disconnect":
-            argv = ["nmcli", "device", "disconnect", interface]
+            raise BrokerDenied("Network changes are disabled until checkpoint rollback support is validated")
         else:
             raise BrokerDenied("Network action not yet implemented with rollback guard")
         return self._run(self._nsenter(argv, root=action == "disconnect"), timeout=30)
