@@ -9,3 +9,5 @@ Current CI merge-base validation includes the administrator WebUI integration as
 This validation also runs docker compose config --quiet for the single YAML deployment.
 
 The current merge-base also exercises per-client isolation for persistent jobs and audit records.
+
+OAuth regression coverage now verifies token-family revocation after refresh-token replay.
