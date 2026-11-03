@@ -87,7 +87,12 @@ class Broker:
         except ImportError as exc:
             raise BrokerDenied("Docker SDK unavailable in broker") from exc
         client = docker.from_env(timeout=10)
-        command = ["python", "/tmp/script.py"] if language == "python" else ["bash", "/tmp/script.sh"]
+        filename = "script.py" if language == "python" else "script.sh"
+        runtime = "python" if language == "python" else "bash"
+        # The container must start before putting script bytes in tmpfs:
+        # otherwise Docker mounts tmpfs on top of the archived script.
+        command = ["/bin/sh", "-c",
+                   f"while [ ! -e /tmp/start.ready ]; do sleep 0.1; done; exec {runtime} /tmp/{filename}"]
         container = None
         try:
             container = client.containers.create(
@@ -105,16 +110,28 @@ class Broker:
                 environment={"PYTHONDONTWRITEBYTECODE": "1"},
                 labels={"app": "kali-mcp", "purpose": "sandbox"},
             )
+            container.start()
             payload = script.encode("utf-8")
-            filename = "script.py" if language == "python" else "script.sh"
             out = io.BytesIO()
             with tarfile.open(fileobj=out, mode="w") as tar:
                 info = tarfile.TarInfo(filename)
                 info.size = len(payload)
-                info.mode = 0o644
+                info.mode = 0o600
+                info.uid = 65534
+                info.gid = 65534
                 tar.addfile(info, io.BytesIO(payload))
-            container.put_archive("/tmp", out.getvalue())
-            container.start()
+            if not container.put_archive("/tmp", out.getvalue()):
+                raise BrokerDenied("Could not transfer script into sandbox")
+            ready = io.BytesIO()
+            with tarfile.open(fileobj=ready, mode="w") as tar:
+                marker = tarfile.TarInfo("start.ready")
+                marker.mode = 0o600
+                marker.uid = 65534
+                marker.gid = 65534
+                marker.size = 0
+                tar.addfile(marker, io.BytesIO(b""))
+            if not container.put_archive("/tmp", ready.getvalue()):
+                raise BrokerDenied("Could not start sandbox script")
             try:
                 result = container.wait(timeout=max(5, min(timeout, self.cfg.max_job_seconds)))
                 exit_code = int(result.get("StatusCode", 1))
