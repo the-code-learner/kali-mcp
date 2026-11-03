@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.0-beta.2 — Portainer single-YAML installation
+
+- Replaced manual download/edit installation instructions with Portainer Git repository or Web Editor deployment.
+- Compose YAML uses Stack environment variables for administrator password, public URL, stable/beta channel and permission ceilings.
+- Inline GitHub-release bootstrap remains self-contained; no separate setup script on the Raspberry Pi.
+
+
 ## v0.1.0-beta.1 — first installable beta
 
 - Adopted exactly the Apache-2.0 LICENSE file from Postmaster MCP; retained its original attribution in NOTICE.
