@@ -131,8 +131,11 @@ def test_oauth_pkce_and_rotation(initialized):
         "client_id": cid, "refresh_token": refresh, "resource": cfg.resource})
     assert rotated.status_code == 200
     assert rotated.json()["refresh_token"] != refresh
+    assert oauth.verify_bearer(rotated.json()["access_token"]) == cid
     assert client.post("/token", data={"grant_type": "refresh_token",
         "client_id": cid, "refresh_token": refresh, "resource": cfg.resource}).status_code == 400
+    # Reusing a consumed refresh credential revokes its full token family.
+    assert oauth.verify_bearer(rotated.json()["access_token"]) is None
 
 
 def test_compose_is_single_yml_and_broker_only_privileged():
