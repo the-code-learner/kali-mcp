@@ -2,7 +2,7 @@
 
 **Self-hosted Kali Linux MCP control plane with modular tools, network management, sandboxed execution, optional host execution and a live WebUI.**
 
-> **Status: architecture and implementation bootstrap — not yet deployable.** No production-ready MCP, OAuth or privileged execution service is released at this stage.
+> **Status: development prototype — not production ready.** A first single-YAML Compose file, MCP core, OAuth endpoints, WebUI, broker, source cache and tests exist, but end-to-end Raspberry Pi, privileged broker and Cloudflare validation are not complete. No stable release has been published.
 
 ## Design targets
 
@@ -21,6 +21,19 @@
 The user has explicitly requested a privileged Docker deployment. A Docker `privileged: true` broker has effectively host-level authority. The WebUI root toggle is a **policy gate for authenticated MCP clients, not isolation from compromise of the broker itself**. The MCP HTTP core must never mount the Docker socket, the host root filesystem or run privileged.
 
 For users operating this system, limit security assessments to systems and networks they own or have permission to test.
+
+## Current implementation
+
+- [kali-mcp.yml](kali-mcp.yml): experimental single-YAML Compose with a root-owned broker and non-root core.
+- [docs/STATUS.md](docs/STATUS.md): verified vs. missing functionality.
+- [docs/CLOUDFLARE.md](docs/CLOUDFLARE.md): one-hostname OAuth discovery and Access bypass plan.
+- [docs/SECURITY.md](docs/SECURITY.md): trust boundaries and untested privileged paths.
+- [docs/TESTING.md](docs/TESTING.md): CI and hardware validation steps.
+
+**Do not enable host root or expose the MCP publicly until the documented
+security and integration tests pass.** The version selector is currently
+set to main for development. Release checks are automatic; installation
+and rollback are still pending implementation.
 
 ## Roadmap
 
