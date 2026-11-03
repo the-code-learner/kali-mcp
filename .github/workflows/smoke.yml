@@ -34,6 +34,22 @@ jobs:
           test "$status" = "401" || { cat /tmp/mcp-auth-response; exit 1; }
           test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = "healthy"
           test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-broker)" = "healthy"
+      - name: Verify isolated Python sandbox
+        run: |
+          docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
+          import sys
+          sys.path.insert(0, "/opt/kali-mcp/current/src")
+          from kali_mcp.broker_client import call
+          result = call("/run/kali-mcp/broker.sock", "execute", {
+              "mode": "sandbox",
+              "script": "print('sandbox-ok')",
+              "language": "python",
+              "timeout": 40,
+          }, timeout=65)
+          print(result)
+          assert result.get("exit_code") == 0, result
+          assert "sandbox-ok" in result.get("stdout", ""), result
+          PY
       - name: Inspect deployment failure
         if: failure()
         run: |
