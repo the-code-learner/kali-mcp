@@ -2,7 +2,9 @@
 
 **Self-hosted Kali Linux MCP control plane with modular tools, network management, sandboxed execution, optional host execution and a live WebUI.**
 
-> **Status: development prototype — not production ready.** A first single-YAML Compose file, MCP core, OAuth endpoints, WebUI, broker, source cache and tests exist, but end-to-end Raspberry Pi, privileged broker and Cloudflare validation are not complete. No stable release has been published.
+> **Status: v0.1.0-beta.1 — installable early beta, not production ready.** Full Docker Compose boot, OAuth client flow, protected MCP tool discovery and a Python sandbox smoke test passed on Linux AMD64. Kali Raspberry Pi 5 ARM64, host-root execution and Cloudflare Access have not yet been validated end to end.
+
+**[Beta installation guide](docs/BETA.md)** · [single YAML](kali-mcp.yml) · [release notes](docs/BETA_RELEASE_NOTES.md) · [implementation status](docs/STATUS.md)
 
 ## Design targets
 
@@ -10,10 +12,10 @@
 - **Single** `kali-mcp.yml` Compose deployment, inspired by [Postmaster MCP](https://github.com/the-code-learner/mail-task-mcp-server).
 - Multi-service internal architecture: non-root MCP/WebUI core, isolated privileged host broker, ephemeral sandbox workers.
 - Dynamic tool registry: Kali tool adapters and installer recipes must **not** create new public MCP endpoints.
-- Stable/beta GitHub Release channels; **automatic periodic checks, manual installation only**, health checks and rollback.
+- Stable/beta GitHub Release channels; **automatic periodic update checks**, with manual install/health checks/rollback planned for a subsequent beta.
 - OAuth authentication for remote MCP clients; Cloudflare Access for the administrative WebUI; same public hostname with narrowly scoped OAuth discovery/authorization exceptions.
-- Persistent jobs, stdout/stderr, artifacts, audit events, network status and live operation monitoring.
-- Wi-Fi managed/AP, optional Nexmon, Ethernet DHCP/static/shared, NetworkManager checkpoints and rollback.
+- Persistent jobs, bounded stdout/stderr, audit events and live status; richer artifacts and PCAP previews are planned.
+- Wi-Fi managed/AP, optional Nexmon, Ethernet DHCP/static/shared, NetworkManager checkpoints and rollback are planned; only basic status/scan is prototyped in the initial beta.
 - A persistent, explicit WebUI toggle for host root execution, capped by the Compose deployment settings. **Disabled by default.**
 
 ## Critical trust boundary
