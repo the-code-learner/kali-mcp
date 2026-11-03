@@ -11,3 +11,5 @@ Round: grant non-root Core write access to SQLite database and WAL files created
 Diagnostic rerun to inspect SQLite main/WAL/SHM ownership and Core volume writeability.
 
 Now pin Docker source to the current base/main SHA, not the stale PR branch SHA.
+
+Runtime now resolves live main HEAD instead of the PR's original base SHA.
