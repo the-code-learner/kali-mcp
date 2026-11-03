@@ -11,3 +11,5 @@ This validation also runs docker compose config --quiet for the single YAML depl
 The current merge-base also exercises per-client isolation for persistent jobs and audit records.
 
 OAuth regression coverage now verifies token-family revocation after refresh-token replay.
+
+The latest merge checks OAuth replay revocation and HTML escaping of job output.
