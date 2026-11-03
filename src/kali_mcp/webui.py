@@ -20,6 +20,7 @@ from .policy import Policy, PolicyDenied
 from .releases import UpdateChecker
 from .store import Store, digest
 from .jobs import Jobs
+from .reports import report_html
 
 
 def _csrf_for(cookie: str, password: str) -> str:
@@ -141,7 +142,7 @@ class UI:
               {note if not active else ''}
               <button type="submit" {disabled}>{'Disable' if active else 'Enable'}</button>
             </form>""")
-        rows = "".join(f"<tr><td>{html.escape(j['tool_id'])}</td><td>{html.escape(j['actor'])}</td><td>{html.escape(j['state'])}</td><td><a href='/api/v1/jobs/{j['id']}'>{j['id'][:12]}</a></td></tr>"
+        rows = "".join(f"<tr><td>{html.escape(j['tool_id'])}</td><td>{html.escape(j['actor'])}</td><td>{html.escape(j['state'])}</td><td><a href='/jobs/{j['id']}'>{j['id'][:12]}</a></td></tr>"
                        for j in self.store.list_jobs(30))
         body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
         <title>Kali MCP — Dashboard</title><link rel="stylesheet" href="/static/app.css"></head><body>
@@ -203,6 +204,20 @@ class UI:
         self.updates.check(force=True)
         self.store.audit("webui", "updates.check", "allow")
         return RedirectResponse("/", status_code=303)
+
+    async def job_report(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        job_id = str(request.path_params["job_id"])
+        job = self.store.get_job(job_id)
+        if job is None:
+            return HTMLResponse("Job not found", status_code=404)
+        return HTMLResponse(report_html(job, self.store.job_events(job_id)),
+            headers={"Cache-Control": "private, no-store",
+                     "X-Content-Type-Options": "nosniff",
+                     "X-Frame-Options": "DENY",
+                     "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'",
+                     "Referrer-Policy": "no-referrer"})
 
     async def job_detail(self, request: Request):
         if (error := self._admin(request)):
