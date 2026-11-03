@@ -1,3 +1,22 @@
+# Kali MCP — SINGLE YAML BETA DEPLOYMENT
+# Edit KALI_MCP_ADMIN_PASSWORD and KALI_MCP_PUBLIC_URL before deploying.
+# This is an experimental privileged host-control stack; review security docs.
+services:
+  kali-mcp-bootstrap:
+    image: python:3.12-slim-bookworm
+    restart: "no"
+    environment:
+      KALI_MCP_REPO: "the-code-learner/kali-mcp"
+      KALI_MCP_VERSION: "latest" # Select the newest stable or beta release
+      KALI_MCP_RELEASE_CHANNEL: "beta" # stable or beta
+    volumes:
+      - kali_mcp_source:/opt/kali-mcp
+      - kali_mcp_data:/data
+      - kali_mcp_core_venv:/opt/venv
+    command:
+      - python
+      - -c
+      - |
         """Safe Postmaster-style GitHub source cache bootstrap.
         
         This file is also the reference implementation of the inline Compose bootstrap.
