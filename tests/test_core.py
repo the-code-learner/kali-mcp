@@ -147,7 +147,7 @@ def test_compose_is_single_yml_and_broker_only_privileged():
 
 def test_runtime_oauth_gate(initialized):
     from kali_mcp.runtime import app
-    client = TestClient(app)
+    client = TestClient(app, base_url="https://kali.example.test")
     response = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
     assert response.status_code == 401
     assert "resource_metadata=" in response.headers["www-authenticate"]
