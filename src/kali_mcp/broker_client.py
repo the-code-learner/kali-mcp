@@ -11,7 +11,16 @@ class BrokerError(RuntimeError):
 
 
 def call(socket_path: str | Path, op: str, payload: dict | None = None, *, timeout: int = 45) -> dict:
-    data = json.dumps({"v": 1, "op": op, "payload": payload or {}}, separators=(",", ":")).encode()
+    effective = dict(payload or {})
+    if op.startswith("terminal_"):
+        # Carry the already authenticated request identity into each PTY IPC call.
+        # A missing request-scoped identity must fail closed.
+        from .server import ACTOR
+        actor = ACTOR.get()
+        if not actor.startswith("mcp:") or actor == "mcp:unknown":
+            raise BrokerError("No authenticated MCP client identity for terminal session")
+        effective["actor"] = actor
+    data = json.dumps({"v": 1, "op": op, "payload": effective}, separators=(",", ":")).encode()
     if len(data) > 256 * 1024:
         raise BrokerError("Request too large")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
