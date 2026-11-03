@@ -1,0 +1,2 @@
+docker>=7,<9
+packaging>=24,<27
