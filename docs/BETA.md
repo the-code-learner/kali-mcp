@@ -1,87 +1,102 @@
-# Kali MCP v0.1.0-beta.1 — installation and test guide
+# Kali MCP — first beta: Portainer single-YAML installation
 
-This **early beta is intended for a dedicated Kali Linux lab appliance**.
-It is not yet a production pentesting gateway. The source is published under
-the same exact Apache-2.0 LICENSE as Postmaster MCP; attribution is in NOTICE.
+This early beta is intended for a **dedicated Kali Linux lab appliance**.
+Do not yet enable host root or expose the service publicly until the Kali
+ARM64 and Cloudflare-specific security tests have been completed.
 
-## Requirements
+The official installation path uses the **Portainer Stack UI**:
+**no curl, no nano, no manual Python installation and no auxiliary scripts.**
 
-- Raspberry Pi 5 with Kali Linux ARM64 and Docker Engine + Compose plugin, or a dedicated Linux AMD64 lab host.
-- A live Internet connection for GitHub Releases, the first Python environment install and Docker image pulls.
-- At least 64 GiB available disk space is suggested; consider a 128 GB microSD or SSD for capture files.
-- A dedicated admin password of **16+ characters**.
-- Any target assessment must remain within a network you own or are authorized to test.
+## Prerequisites
 
-## Install from one YAML
+- Kali Linux on Raspberry Pi 5 ARM64 (or a Linux AMD64 lab host)
+- Docker Engine, Compose plugin and Portainer installed and operational
+- Network access to Docker Hub, GitHub Releases, GitHub's source archive and PyPI
+- A unique administrator password of 16 or more characters
 
-After the GitHub beta release appears, download its pinned Compose YAML:
+## Recommended: Portainer Git repository stack
 
-    curl -fsSL https://raw.githubusercontent.com/the-code-learner/kali-mcp/v0.1.0-beta.1/kali-mcp.yml -o kali-mcp.yml
+1. In Portainer choose the Docker environment, then **Stacks → Add stack**.
+2. Enter stack name `kali-mcp` and choose **Git repository**.
+3. Repository URL: `https://github.com/the-code-learner/kali-mcp`
+4. Repository reference: `refs/tags/v0.1.0-beta.2` (the published prerelease).
+5. Compose path: `kali-mcp.yml` (repository root).
+6. Expand **Environment variables** and add `KALI_MCP_ADMIN_PASSWORD`
+   with a unique password of at least 16 characters.
+7. Leave `KALI_MCP_RELEASE_CHANNEL` unset to use `beta` by default,
+   or set it explicitly to `beta`.
+8. For a Cloudflare deployment also add
+   `KALI_MCP_PUBLIC_URL=https://YOUR_SUBDOMAIN.YOUR_DOMAIN`
+   and configure the Access policy in [CLOUDFLARE.md](CLOUDFLARE.md).
+   For the first isolated/local smoke test leave it unset.
+9. Click **Deploy the stack**.
 
-Edit the YAML in a private location:
+**What happens automatically:** the Compose bootstrap executes Python already
+embedded inside `kali-mcp.yml`. It queries GitHub Releases, selects the highest
+version allowed by `KALI_MCP_RELEASE_CHANNEL`, downloads the source archive,
+rejects unsafe archive members, stores the version in a persistent source
+volume, and starts the broker and MCP/WebUI with persistent Python environments.
 
-- Set `KALI_MCP_ADMIN_PASSWORD` in the Core service to a long unique value.
-- Keep `KALI_MCP_RELEASE_CHANNEL: "beta"` in both bootstrap and Core.
-- Keep `KALI_MCP_VERSION: "latest"` in bootstrap to install the highest available beta-or-stable release the first time.
-- Leave host, root, apt and network-changing capabilities **false** until explicitly testing on isolated hardware.
-- For a browser accessed by SSH port forwarding, leave `KALI_MCP_PUBLIC_URL` as `http://localhost:8787`.
-- For Cloudflare Tunnel/Access, set `KALI_MCP_PUBLIC_URL` to the same HTTPS origin in **both** Core and Broker and configure the policies in [CLOUDFLARE.md](CLOUDFLARE.md).
+Portainer fetches the Compose definition from the repository for this approach.
+This is not a requirement to download or edit YAML on the Raspberry Pi.
 
-Start the service:
+## Alternative: Portainer Web editor
 
-    docker compose -f kali-mcp.yml up -d --wait
+Choose **Stacks → Add stack → Web editor**, paste the **entire** contents of
+[kali-mcp.yml](../kali-mcp.yml), add the same Stack environment variables and
+click **Deploy the stack**. The inline bootstrap downloads the application just
+as in the Git repository method.
 
-Inspect status and logs:
+## Minimal Portainer environment variables
 
-    docker compose -f kali-mcp.yml ps
-    docker compose -f kali-mcp.yml logs --tail=120
+| Name | Value | Required |
+| --- | --- | --- |
+| `KALI_MCP_ADMIN_PASSWORD` | A unique strong administrator password, 16+ characters | Yes |
+| `KALI_MCP_PUBLIC_URL` | `https://kali.example.com`, same hostname used for MCP and WebUI | Only for remote OAuth |
+| `KALI_MCP_RELEASE_CHANNEL` | `beta` (accepts stable and beta) or `stable` (stable only) | No, defaults to `beta` |
+| `KALI_MCP_VERSION` | `latest` or a pinned tag | No, defaults to `latest` |
 
-The WebUI binds to `127.0.0.1:8787` by default. On a different computer,
-use SSH local forwarding instead of exposing the port:
+Other YAML ceilings, such as `KALI_MCP_ALLOW_HOST_ROOT` and
+`KALI_MCP_ALLOW_MCP_ROOT`, remain `false` by default; they can be set through
+the Stack environment variables when testing host capabilities on a dedicated
+device. The **WebUI root toggle** is a second, independent requirement.
 
-    ssh -L 8787:127.0.0.1:8787 kali@RASPBERRY_IP
+**Important:** while the Core is non-root, the Docker broker itself is privileged
+and has effective host-level authority regardless of the WebUI toggle.
 
-Visit `http://localhost:8787` and sign in with the administrator password.
-For Cloudflare Tunnel, point the origin at `http://127.0.0.1:8787` and access
-the configured HTTPS hostname.
+## Local browser access
 
-The MCP address for a client is the single URL `https://YOUR_DOMAIN/mcp`.
-OAuth authorization code with PKCE S256 is implemented; actual third-party
-client interoperability and Cloudflare Access behavior must be tested in
-your zone before exposing the service to the Internet.
+The Compose file maps the server to `127.0.0.1:8787` on the Pi.
+For access from another computer without exposing the port publicly,
+an SSH tunnel can forward local port 8787. After connecting, browse to
+`http://localhost:8787` and use the Portainer-configured password.
 
-## What you can test in this beta
+For remote MCP clients the public URL is
+`https://YOUR_SUBDOMAIN.YOUR_DOMAIN/mcp` and the app implements
+OAuth authorization code + PKCE S256. Cloudflare Access must permit only
+the necessary OAuth discovery/exchange and protected MCP paths, with the
+WebUI behind Access. Real client and Cloudflare zone testing remain necessary.
 
-- OAuth server discovery, registration, browser admin consent and bearer enforcement.
-- WebUI sign-in, CSRF protection and capability toggles with root disclaimer.
-- Tool catalog and typed read-only inventory.
-- Sandbox Python/Bash execution with network disabled by default.
-- Live and saved jobs, read-only output reports and recent audit events.
-- Stable/beta release metadata checks (automatically every six hours).
-- A preliminary Wi-Fi scan/interface-status capability.
+## Releases and update behavior
 
-**Currently not supported:** actual in-app update installation and rollback;
-automatic Nexmon setup, full Wi-Fi AP/Ethernet gateway switching and rollback;
-long-term packet artifacts/PCAP management; robust cancellation of all
-descendant processes. The MCP endpoints for unfinished changes return an
-explicit error rather than pretending to perform the action.
+With `KALI_MCP_RELEASE_CHANNEL=beta`, initial installation selects the newest
+beta **or** stable GitHub release. With `stable`, only stable releases count.
+After initial installation, startup deliberately reuses the cached version.
+Release **metadata** is checked periodically, but installing an update via
+MCP/WebUI is not yet supported. Updating the Git-backed Compose definition
+alone does **not** force a new application version.
 
-Host root and terminal functions are **experimental** and should not be
-enabled until separately validated on Kali ARM64. The privileged broker
-has effective host-level authority even while its WebUI root toggle is off.
-Do not use this deployment on a shared or production host.
+There is no stable release currently; keep the channel `beta` for this beta.
 
-## First-run failure modes
+## Current beta feature limits
 
-- The Core will intentionally refuse to start if the administrator password is empty or shorter than 16 characters.
-- The initial beta channel must be `beta`; a stable-only channel has no published stable build at this point.
-- A previously cached release is reused at restart. The update checker **does not install** new versions automatically.
-- If the broker cannot reach host tools through namespace entry on your Kali image, do not enable host execution; collect the broker logs for debugging.
-- The Docker bridge's host port maps to localhost only. To provide LAN access, modify the binding explicitly and protect it with a firewall.
+Available: authenticated WebUI, OAuth MCP, initial tool registry,
+typed read-only actions, persistent job/results/audit status and experimental
+sandbox Python/Bash execution. The Docker AMD64 bootstrap, HTTP OAuth
+and sandbox Python smoke tests passed in CI.
 
-## Stop
+Not yet complete: reliable application update/rollback, Kali ARM64 host
+verification, root PTY hardening, Wi-Fi AP/Nexmon management, Ethernet NAT
+configuration with NetworkManager checkpoint rollback and PCAP artifacts.
 
-    docker compose -f kali-mcp.yml down
-
-Do not use `down -v` unless you intentionally want to erase source cache,
-settings, jobs and persistent data.
+Do not treat the current beta as a production-hardened remote root endpoint.
