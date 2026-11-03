@@ -107,20 +107,35 @@ class Store:
         job_id = uuid4().hex
         # Sensitive script bodies and authentication tokens must not land in SQLite.
         sanitized = {k: ("[REDACTED]" if k in {"password", "token", "script", "command", "content"} else v) for k, v in args.items()}
+        encoded_args = json.dumps(sanitized, default=str)
+        if len(encoded_args) > 8192:
+            encoded_args = json.dumps({"truncated": True, "keys": list(sanitized)[:32]})
         with self.lock:
             self.db.execute(
                 "INSERT INTO jobs(id,at,actor,tool_id,mode,state,args_json) VALUES (?,?,?,?,?,?,?)",
-                (job_id, utc(), actor[:128], tool_id[:128], mode[:32], "queued", json.dumps(sanitized, default=str)[:8192]))
+                (job_id, utc(), actor[:128], tool_id[:128], mode[:32], "queued", encoded_args))
         return job_id
 
     def job_state(self, job_id: str, state: str, *, result: dict | None = None, exit_code: int | None = None) -> None:
         if state not in {"queued", "running", "completed", "failed", "timed_out", "cancelled", "lost"}:
             raise ValueError("Invalid job state")
+        encoded_result = None
+        if result is not None:
+            bounded = dict(result)
+            for field in ("stdout", "stderr"):
+                value = bounded.get(field)
+                if isinstance(value, str) and len(value) > 24000:
+                    bounded[field] = value[:24000]
+                    bounded["truncated"] = True
+            encoded_result = json.dumps(bounded, default=str)
+            if len(encoded_result) > 65536:
+                encoded_result = json.dumps({"truncated": True,
+                    "error": "Result exceeded persistent storage limit"})
         with self.lock:
             self.db.execute(
                 "UPDATE jobs SET state=?, finished_at=?, result_json=?, exit_code=? WHERE id=?",
                 (state, utc() if state not in ("queued", "running") else None,
-                 json.dumps(result, default=str)[:65536] if result is not None else None, exit_code, job_id))
+                 encoded_result, exit_code, job_id))
             self.db.execute("INSERT INTO job_events(job_id,at,kind,data) VALUES(?,?,?,?)",
                             (job_id, utc(), "state", state))
 
