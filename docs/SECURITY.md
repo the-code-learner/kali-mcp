@@ -13,6 +13,11 @@ The tool adapters validate an explicit CIDR authorization scope and bounded
 arguments. The sandbox uses Docker with network none, no additional Linux
 capabilities, read-only root filesystem and resource limits.
 
+Sandbox scripts are passed as bounded Docker command arguments in the first
+beta. Administrators with Docker socket access can inspect them while the
+sandbox container exists. Do not embed API tokens or passwords directly in
+these scripts. A later version will use a confidential script transport.
+
 Known limits: token misuse, host-root commands, container escape, loss of
 auditing during host compromise, and process descendants that escape the job
 tree require specific additional security controls. An authorized root shell
