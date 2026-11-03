@@ -1,22 +1,3 @@
-# Kali MCP — SINGLE YAML DEVELOPMENT DEPLOYMENT
-# Edit KALI_MCP_ADMIN_PASSWORD and KALI_MCP_PUBLIC_URL before deploying.
-# This is an experimental privileged host-control stack; review security docs.
-services:
-  kali-mcp-bootstrap:
-    image: python:3.12-slim-bookworm
-    restart: "no"
-    environment:
-      KALI_MCP_REPO: "the-code-learner/kali-mcp"
-      KALI_MCP_VERSION: "main" # change to "latest" after first stable/beta release
-      KALI_MCP_RELEASE_CHANNEL: "stable" # stable or beta
-    volumes:
-      - kali_mcp_source:/opt/kali-mcp
-      - kali_mcp_data:/data
-      - kali_mcp_core_venv:/opt/venv
-    command:
-      - python
-      - -c
-      - |
         """Safe Postmaster-style GitHub source cache bootstrap.
         
         This file is also the reference implementation of the inline Compose bootstrap.
@@ -70,6 +51,9 @@ services:
                 members = archive.getmembers()
                 if len(members) > 5000:
                     raise RuntimeError("Archive contains too many members")
+                total_bytes = sum(m.size for m in members if m.isfile())
+                if total_bytes > 96 * 1024 * 1024:
+                    raise RuntimeError("Expanded source archive exceeds 96 MiB")
                 roots = {m.name.split("/", 1)[0] for m in members if m.name}
                 if len(roots) != 1:
                     raise RuntimeError("Invalid archive root")
@@ -168,7 +152,6 @@ services:
             os.chown(folder,10001,10001)
             os.chmod(folder,0o750)
         
-
   kali-mcp-broker:
     image: python:3.12-slim-bookworm
     container_name: kali-mcp-broker
@@ -239,7 +222,7 @@ services:
       KALI_MCP_PUBLIC_URL: "http://localhost:8787" # change to https://kali.example.com
       KALI_MCP_ADMIN_PASSWORD: "" # REQUIRED: set strong 16+ character private password
       KALI_MCP_REPO: "the-code-learner/kali-mcp"
-      KALI_MCP_RELEASE_CHANNEL: "stable"
+      KALI_MCP_RELEASE_CHANNEL: "beta"
       KALI_MCP_UPDATE_CHECK_SECONDS: "21600"
       KALI_MCP_ALLOWED_CIDRS: "127.0.0.1/32"
       KALI_MCP_ALLOW_HOST_EXEC: "false" # hard ceiling
