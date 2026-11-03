@@ -51,6 +51,10 @@ jobs:
           assert result.get("exit_code") == 0, result
           assert "sandbox-ok" in result.get("stdout", ""), result
           PY
+      - name: Verify full HTTP OAuth consent and authenticated MCP tool discovery
+        env:
+          KALI_MCP_TEST_ADMIN_PASSWORD: "CI_SANDBOX_ADMIN_TEST_PASSWORD_2026"
+        run: python3 scripts/smoke_http.py
       - name: Inspect deployment failure
         if: failure()
         run: |
