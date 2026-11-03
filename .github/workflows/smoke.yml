@@ -1,0 +1,44 @@
+name: Beta appliance Docker smoke
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  docker-smoke:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure isolated smoke deployment
+        env:
+          REF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          cp kali-mcp.yml kali-mcp-smoke.yml
+          sed -i 's/KALI_MCP_VERSION: "latest"/KALI_MCP_VERSION: "'"$REF"'"/' kali-mcp-smoke.yml
+          sed -i 's/KALI_MCP_ADMIN_PASSWORD: ""/KALI_MCP_ADMIN_PASSWORD: "CI_SANDBOX_ADMIN_TEST_PASSWORD_2026"/' kali-mcp-smoke.yml
+          docker compose -f kali-mcp-smoke.yml config --quiet
+      - name: Boot single-YAML appliance
+        run: docker compose -f kali-mcp-smoke.yml up -d --wait --wait-timeout 300
+      - name: Verify HTTP, discovery, and default-deny MCP
+        run: |
+          set -eu
+          curl --fail --silent --show-error http://127.0.0.1:8787/healthz | python3 -m json.tool
+          curl --fail --silent --show-error http://127.0.0.1:8787/.well-known/oauth-authorization-server | python3 -m json.tool
+          status="$(curl --silent --output /tmp/mcp-auth-response --write-out '%{http_code}' -X POST -H 'content-type: application/json' -d '{"jsonrpc":"2.0","method":"tools/list","id":1}' http://127.0.0.1:8787/mcp)"
+          test "$status" = "401" || { cat /tmp/mcp-auth-response; exit 1; }
+          test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = "healthy"
+          test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-broker)" = "healthy"
+      - name: Inspect deployment failure
+        if: failure()
+        run: |
+          docker compose -f kali-mcp-smoke.yml ps || true
+          docker compose -f kali-mcp-smoke.yml logs --tail=160 || true
+      - name: Cleanup
+        if: always()
+        run: docker compose -f kali-mcp-smoke.yml down --volumes --remove-orphans || true
