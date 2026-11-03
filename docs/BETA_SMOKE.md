@@ -13,3 +13,5 @@ Diagnostic rerun to inspect SQLite main/WAL/SHM ownership and Core volume writea
 Now pin Docker source to the current base/main SHA, not the stale PR branch SHA.
 
 Runtime now resolves live main HEAD instead of the PR's original base SHA.
+
+Now verifying sandbox inline execution with read-only root filesystem.
