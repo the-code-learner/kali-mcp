@@ -18,12 +18,13 @@ services:
       - /tmp:rw,nosuid,nodev,size=64m
     working_dir: /opt/kali-mcp/current
     ports:
-      - "127.0.0.1:${KALI_MCP_PORT:-8787}:8000"
+      - "${KALI_MCP_BIND_ADDRESS:-127.0.0.1}:${KALI_MCP_PORT:-8787}:8000"
     volumes:
       - /opt/kali-mcp/current:/opt/kali-mcp/current:ro
       - /var/lib/kali-mcp/venv:/opt/venv
       - /var/lib/kali-mcp/core:/data
       - /run/kali-mcp-agent:/run/kali-mcp-agent:ro
+      - /var/lib/kali-mcp/auth/superuser.json:/run/secrets/kali-mcp-superuser.json:ro
     environment:
       PYTHONUNBUFFERED: "1"
       PYTHONDONTWRITEBYTECODE: "1"
@@ -31,13 +32,14 @@ services:
       MCP_HOST: "0.0.0.0"
       MCP_PORT: "8000"
       KALI_MCP_PUBLIC_URL: "${KALI_MCP_PUBLIC_URL:-http://localhost:8787}"
-      KALI_MCP_ADMIN_PASSWORD: "${KALI_MCP_ADMIN_PASSWORD:?Set KALI_MCP_ADMIN_PASSWORD in /etc/kali-mcp/stack.env}"
+      KALI_MCP_SUPERUSER_FILE: "/run/secrets/kali-mcp-superuser.json"
       KALI_MCP_REPO: "the-code-learner/kali-mcp"
       KALI_MCP_RELEASE_CHANNEL: "${KALI_MCP_RELEASE_CHANNEL:-beta}"
       KALI_MCP_UPDATE_CHECK_SECONDS: "${KALI_MCP_UPDATE_CHECK_SECONDS:-21600}"
       KALI_MCP_ALLOWED_CIDRS: "${KALI_MCP_ALLOWED_CIDRS:-127.0.0.1/32}"
       KALI_MCP_BROKER_SOCKET: "/run/kali-mcp-agent/agent.sock"
       KALI_MCP_HOST_AGENT: "true"
+      KALI_MCP_REQUIRE_SUPERUSER: "true"
       KALI_MCP_ALLOW_HOST_EXEC: "${KALI_MCP_ALLOW_HOST_EXEC:-false}"
       KALI_MCP_ALLOW_HOST_ROOT: "${KALI_MCP_ALLOW_HOST_ROOT:-false}"
       KALI_MCP_ALLOW_PACKAGE_INSTALL: "${KALI_MCP_ALLOW_PACKAGE_INSTALL:-false}"
