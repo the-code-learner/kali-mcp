@@ -205,6 +205,17 @@ class UI:
             </form>""")
         rows = "".join(f"<tr><td>{html.escape(j['tool_id'])}</td><td>{html.escape(j['actor'])}</td><td>{html.escape(j['state'])}</td><td><a href='/jobs/{j['id']}'>{j['id'][:12]}</a></td></tr>"
                        for j in self.store.list_jobs(30))
+        clients = self.store.list_clients(50)
+        client_rows = "".join(
+            "<tr><td>" + html.escape(str(c["name"])) + "</td><td><code>"
+            + html.escape(str(c["client_id"])[:12]) + "</code></td><td>"
+            + ("Active" if c["active"] else "Revoked / expired") + "</td><td>"
+            + '<form action="/api/v1/clients/revoke" method="post">'
+            + '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">'
+            + '<input type="hidden" name="client_id" value="' + html.escape(c["client_id"]) + '">'
+            + '<button type="submit">Revoke access</button></form>'
+            + "</td></tr>"
+            for c in clients)
         body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
         <title>Kali MCP — Dashboard</title><link rel="stylesheet" href="/static/app.css"></head><body>
         <header><h1>Kali MCP <small>Control Plane</small></h1>
@@ -225,6 +236,10 @@ class UI:
         <label><input type="checkbox" name="confirm_update" value="yes" required>
         I understand this updates the native Agent and Core and restarts services.</label>
         <button type="submit">Install latest eligible release</button></form></section>
+        <section><h2>Authorized MCP clients</h2>
+        <p class="muted">Revocation invalidates all active bearer and refresh tokens for that client.</p>
+        <table><thead><tr><th>Client</th><th>ID</th><th>State</th><th>Action</th></tr></thead>
+        <tbody>{client_rows}</tbody></table></section>
         <section><h2>Audit</h2><pre id="audit">Loading ...</pre></section>
         </main><script src="/static/app.js" defer></script></body></html>"""
         return HTMLResponse(body, headers={"Cache-Control": "no-store",
@@ -310,6 +325,21 @@ class UI:
             return RedirectResponse("/jobs/" + result["job_id"], status_code=303)
         except (PolicyDenied, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=403)
+
+    async def revoke_client(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        form = await request.form()
+        if (error := self._csrf(request, str(form.get("csrf") or ""))):
+            return error
+        try:
+            done = self.store.revoke_client(str(form.get("client_id") or ""),
+                                            actor="webui:" + request.state.admin_username)
+        except ValueError:
+            return JSONResponse({"error": "Invalid client identifier"}, status_code=400)
+        if not done:
+            return JSONResponse({"error": "Unknown client"}, status_code=404)
+        return RedirectResponse("/", status_code=303)
 
     async def job_report(self, request: Request):
         if (error := self._admin(request)):
