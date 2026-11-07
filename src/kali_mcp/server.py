@@ -227,8 +227,13 @@ def updates_install(tag: str) -> dict:
         policy.require("mcp_updates", actor=actor())
     except PolicyDenied as exc:
         return {"ok": False, "error": str(exc)}
-    return {"ok": False, "error": "Release installation not available in this development build; no change was made",
-            "requested_tag": tag}
+    if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() != "true":
+        return {"ok": False, "error": "Upgrade scheduling requires the native systemd Host Agent"}
+    latest = updates.check(force=True).get("latest")
+    if not latest or tag != latest:
+        return {"ok": False, "error": "Only the current latest eligible release can be installed"}
+    return jobs.submit(actor=actor(), tool_id="core-upgrade", mode="systemd",
+                       operation="updates_install", payload={"tag": tag})
 
 
 @mcp.tool()
