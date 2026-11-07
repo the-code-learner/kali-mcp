@@ -26,6 +26,7 @@ import threading
 from .broker import Broker, BrokerDenied, Handler, LocalServer
 from .config import Config
 from .registry import installer_argv
+from .superuser import DEFAULT_HOST_FILE, read_record, verify
 
 
 CAPABILITIES = frozenset({"host_exec", "host_root", "package_install", "network_changes", "mcp_updates"})
@@ -111,6 +112,14 @@ class NativeAgent(Broker):
             key, enabled = data.get("feature"), data.get("enabled")
             if not isinstance(key, str) or type(enabled) is not bool:
                 raise BrokerDenied("Invalid capability value")
+            # The control socket alone never authorizes a privilege change.
+            # Authenticate the superuser independently on the root-owned host.
+            username = data.get("superuser_name")
+            password = data.get("superuser_password")
+            auth_path = Path(os.getenv("KALI_MCP_SUPERUSER_FILE", str(DEFAULT_HOST_FILE)))
+            if not verify(read_record(auth_path), username, password):
+                self.store.audit("host-agent", "settings.auth", "deny", key)
+                raise BrokerDenied("Superuser authentication required")
             self.store.set_setting(key, enabled, self.cfg)
             if not enabled and key in {"host_exec", "host_root"}:
                 # Revocation is immediate for terminals still owned by the Agent.
