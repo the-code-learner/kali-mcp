@@ -222,7 +222,7 @@ def updates_check() -> dict:
 
 @mcp.tool()
 def updates_install(tag: str) -> dict:
-    """WRITE ACTION. Update installation is withheld until crash-safe supervisor support is validated."""
+    """WRITE ACTION. Manually schedule the latest eligible release through the native systemd Agent."""
     try:
         policy.require("mcp_updates", actor=actor())
     except PolicyDenied as exc:
