@@ -226,7 +226,7 @@ done
 test -S /run/kali-mcp-agent/agent.sock
 docker compose --env-file "$CONFIG/stack.env" -f "$ROOT/current/kali-mcp-hybrid.yml" config --quiet
 docker compose --env-file "$CONFIG/stack.env" -f "$ROOT/current/kali-mcp-hybrid.yml" \
-  up -d --wait --wait-timeout 300
+  up -d --force-recreate --wait --wait-timeout 300
 ACTIVATED=false
 trap - ERR
 echo
