@@ -39,7 +39,11 @@ jobs:
       - name: Validate systemd service and nonprivileged Compose
         run: |
           set -euo pipefail
-          sudo systemctl is-active --quiet kali-mcp-agent.service
+          echo "Host Agent systemd service:"
+          sudo systemctl is-active kali-mcp-agent.service
+          sudo ls -la /run/kali-mcp-agent || true
+          echo "Unix socket permissions:"
+          sudo stat -c '%F %a %U %G %n' /run/kali-mcp-agent/agent.sock || true
           test -S /run/kali-mcp-agent/agent.sock
           stat -c '%a %U %G' /run/kali-mcp-agent/agent.sock
           test "$(docker inspect --format '{{.HostConfig.Privileged}}' kali-mcp-core)" = false
