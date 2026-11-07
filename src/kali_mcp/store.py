@@ -175,6 +175,31 @@ class Store:
                 "SELECT * FROM job_events WHERE job_id=? ORDER BY id LIMIT ?",
                 (job_id, max(1, min(limit, 500))))]
 
+    def list_clients(self, limit: int = 100) -> list[dict]:
+        """Admin-only inventory; never return bearer, refresh or auth-code secrets."""
+        with self.lock:
+            return [dict(row) for row in self.db.execute("""
+                SELECT c.client_id, c.name, c.created_at,
+                       EXISTS(SELECT 1 FROM oauth_tokens t
+                              WHERE t.client_id=c.client_id AND t.revoked=0
+                                AND t.expires>strftime('%s','now')) AS active
+                  FROM oauth_clients c ORDER BY c.created_at DESC LIMIT ?
+                """, (max(1, min(limit, 200)),))]
+
+    def revoke_client(self, client_id: str, actor: str = "webui") -> bool:
+        if not isinstance(client_id, str) or len(client_id) != 32 or any(
+                char not in "0123456789abcdef" for char in client_id):
+            raise ValueError("Invalid client ID")
+        with self.transaction():
+            found = self.db.execute("SELECT client_id FROM oauth_clients WHERE client_id=?",
+                                    (client_id,)).fetchone()
+            if not found:
+                return False
+            self.db.execute("UPDATE oauth_tokens SET revoked=1 WHERE client_id=?", (client_id,))
+            self.db.execute("DELETE FROM oauth_codes WHERE client_id=?", (client_id,))
+            self._audit(actor, "client.revoke", "allow", client_id)
+        return True
+
     def close(self) -> None:
         with self.lock:
             self.db.close()
