@@ -273,24 +273,26 @@ class UI:
         enabled = str(form.get("enabled") or "").lower() == "true"
         if enabled and name == "host_root" and str(form.get("disclaimer") or "") != "yes":
             return JSONResponse({"error": "Root disclaimer must be accepted"}, status_code=400)
-        previous = self.store.get_setting(name)
+        tracked = ("host_exec", "host_root", "package_install",
+                   "network_changes", "mcp_updates")
+        previous = {feature: self.store.get_setting(feature) for feature in tracked}
         try:
             self.policy.set_webui(name, enabled)
-            if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() == "true" and name in {
-                    "host_exec", "host_root", "package_install", "network_changes", "mcp_updates"}:
+            if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() == "true" and name in tracked:
                 from .broker_client import call
-                try:
-                    provided = str(form.get("superuser_password") or "")
-                    if not provided:
-                        raise PolicyDenied("Confirm superuser password to change host permissions")
-                    call(self.cfg.broker_socket, "settings_set",
-                         {"feature": name, "enabled": enabled,
-                          "superuser_name": request.state.admin_username,
-                          "superuser_password": provided}, timeout=15)
-                except Exception:
-                    self.store.set_setting(name, previous, "webui-rollback")
-                    raise
-        except (PolicyDenied, Exception) as exc:
+                provided = str(form.get("superuser_password") or "")
+                if not provided:
+                    raise PolicyDenied("Confirm superuser password to change host permissions")
+                call(self.cfg.broker_socket, "settings_set",
+                     {"feature": name, "enabled": enabled,
+                      "superuser_name": request.state.admin_username,
+                      "superuser_password": provided}, timeout=15)
+        except Exception as exc:
+            # host_exec=off also revokes root. Restore the WHOLE snapshot
+            # if host authentication/IPC failed, avoiding split-brain policy.
+            for feature, prior in previous.items():
+                if self.store.get_setting(feature) != prior:
+                    self.store.set_setting(feature, prior, "webui-rollback")
             return JSONResponse({"error": str(exc)[:300]}, status_code=403)
         return RedirectResponse("/", status_code=303)
 
