@@ -1,0 +1,61 @@
+name: Verify published hybrid beta.3 installer
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/verify-hybrid-beta.yml]
+permissions:
+  contents: read
+jobs:
+  verify-hybrid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download published installer, Compose and checksums
+        run: |
+          curl -fLsS https://github.com/the-code-learner/kali-mcp/releases/download/v0.1.0-beta.3/install-hybrid.sh -o install-hybrid.sh
+          curl -fLsS https://github.com/the-code-learner/kali-mcp/releases/download/v0.1.0-beta.3/kali-mcp-hybrid.yml -o kali-mcp-hybrid.yml
+          curl -fLsS https://github.com/the-code-learner/kali-mcp/releases/download/v0.1.0-beta.3/SHA256SUMS -o SHA256SUMS
+          sha256sum -c SHA256SUMS
+          bash -n install-hybrid.sh
+      - name: Run exact release installer using latest beta
+        env:
+          KALI_MCP_ADMIN_PASSWORD: "CI_HYBRID_RELEASE_VERIFY_PASSWORD_2026"
+          KALI_MCP_ACCESS_MODE: local
+          KALI_MCP_RELEASE_CHANNEL: beta
+        run: sudo -E bash install-hybrid.sh --non-interactive
+      - name: Verify native Agent, Core, OAuth, policy and sandbox
+        env:
+          KALI_MCP_TEST_ADMIN_PASSWORD: "CI_HYBRID_RELEASE_VERIFY_PASSWORD_2026"
+        run: |
+          test "$(sudo cat /opt/kali-mcp/current/.source-ready)" = "v0.1.0-beta.3"
+          sudo systemctl is-active --quiet kali-mcp-agent.service
+          sudo test -S /run/kali-mcp-agent/agent.sock
+          test "$(docker inspect --format '{{.HostConfig.Privileged}}' kali-mcp-core)" = false
+          test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
+          sudo kali-mcp status
+          curl -fsS http://127.0.0.1:8787/healthz
+          docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
+          import sys
+          sys.path.insert(0, "/opt/kali-mcp/current/src")
+          from kali_mcp.broker_client import call
+          ipc="/run/kali-mcp-agent/agent.sock"
+          assert call(ipc, "ping")["broker"] == "systemd-host-agent"
+          assert call(ipc, "settings_get")["settings"]["host_root"] is False
+          x=call(ipc, "execute", {"mode":"sandbox","language":"python","script":"print('release-beta3-ok')","timeout":30},timeout=60)
+          assert x["exit_code"] == 0 and "release-beta3-ok" in x["stdout"], x
+          PY
+          python3 scripts/smoke_http.py
+      - name: Diagnostic logs
+        if: failure()
+        run: |
+          sudo systemctl status kali-mcp-agent.service --no-pager || true
+          sudo journalctl -u kali-mcp-agent.service -n 60 --no-pager || true
+          docker logs kali-mcp-core --tail 100 || true
+      - name: Cleanup
+        if: always()
+        run: |
+          sudo systemctl stop kali-mcp-agent.service || true
+          if test -f /etc/kali-mcp/stack.env; then
+            sudo docker compose --env-file /etc/kali-mcp/stack.env -f /opt/kali-mcp/current/kali-mcp-hybrid.yml down -v || true
+          fi
