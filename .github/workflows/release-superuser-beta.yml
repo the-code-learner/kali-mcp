@@ -1,0 +1,121 @@
+name: Publish hardened superuser beta.4
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/release-superuser-beta.yml]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'the-code-learner/kali-mcp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify beta4 and security sources
+        run: |
+          test "$(cat VERSION)" = "0.1.0-beta.4"
+          test -s docs/SECURITY_BETA_RELEASE_NOTES.md
+          test -s src/kali_mcp/superuser.py
+          bash -n scripts/install-hybrid.sh
+          python -m pip install -r requirements.txt pytest PyYAML
+          python -m compileall -q src scripts tests
+          pytest -q
+      - name: Install SSH wizard + native systemd Host Agent
+        run: |
+          sudo env KALI_MCP_VERSION="$GITHUB_SHA" \
+            KALI_MCP_RELEASE_CHANNEL=beta \
+            KALI_MCP_ADMIN_PASSWORD=CI_BETA4_ONLY_BOOTSTRAP_PASSWORD_2026 \
+            KALI_MCP_ACCESS_MODE=local \
+            bash scripts/install-hybrid.sh --non-interactive
+      - name: Assert hashed credentials, protected CLI, and nonprivileged Core
+        run: |
+          set -euo pipefail
+          sudo systemctl is-active --quiet kali-mcp-agent.service
+          test "$(docker inspect --format '{{.HostConfig.Privileged}}' kali-mcp-core)" = false
+          test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
+          sudo test -f /etc/kali-mcp/superuser.json
+          sudo test "$(sudo stat -c '%a' /etc/kali-mcp/superuser.json)" = 600
+          ! sudo grep -q '^KALI_MCP_ADMIN_PASSWORD=' /etc/kali-mcp/stack.env
+          docker inspect --format '{{json .Config.Env}}' kali-mcp-core | python3 -c '
+          import sys,json
+          data=json.load(sys.stdin)
+          assert not any("KALI_MCP_ADMIN_PASSWORD=" in value for value in data)'
+          sudo sh -c 'umask 077; printf "%s\n" CI_BETA4_ONLY_BOOTSTRAP_PASSWORD_2026 > /run/kali-mcp-cli-ci'
+          sudo env KALI_MCP_CLI_PASSWORD_FILE=/run/kali-mcp-cli-ci kali-mcp status
+          curl -fsS http://127.0.0.1:8787/healthz
+      - name: Verify Host Agent denies unauthenticated privilege toggle
+        run: |
+          docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
+          import sys
+          sys.path.insert(0,"/opt/kali-mcp/current/src")
+          from kali_mcp.broker_client import call,BrokerError
+          socket="/run/kali-mcp-agent/agent.sock"
+          assert call(socket,"ping")["broker"] == "systemd-host-agent"
+          try:
+              call(socket,"settings_set",{"feature":"host_exec","enabled":True},timeout=5)
+          except BrokerError:
+              pass
+          else:
+              raise AssertionError("Privilege escalation through unauthenticated IPC")
+          assert call(socket,"settings_get")["settings"]["host_exec"] is False
+          result=call(socket,"execute",{"mode":"sandbox","language":"python",
+                      "script":"print('hardened-beta-ok')","timeout":30},timeout=60)
+          assert result["exit_code"] == 0 and "hardened-beta-ok" in result["stdout"], result
+          PY
+      - name: Complete OAuth approval and MCP tool discovery
+        env:
+          KALI_MCP_TEST_ADMIN_PASSWORD: CI_BETA4_ONLY_BOOTSTRAP_PASSWORD_2026
+        run: python3 scripts/smoke_http.py
+      - name: Verify repeat upgrade retains superuser hash
+        run: |
+          before="$(sudo sha256sum /etc/kali-mcp/superuser.json | awk '{print $1}')"
+          sudo env KALI_MCP_VERSION="$GITHUB_SHA" \
+            bash scripts/install-hybrid.sh --upgrade --non-interactive
+          after="$(sudo sha256sum /etc/kali-mcp/superuser.json | awk '{print $1}')"
+          test "$before" = "$after"
+          test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
+      - name: Diagnostics
+        if: failure()
+        run: |
+          sudo systemctl status kali-mcp-agent.service --no-pager || true
+          sudo journalctl -u kali-mcp-agent.service -n 100 --no-pager || true
+          docker logs kali-mcp-core --tail 100 || true
+      - name: Cleanup
+        if: always()
+        run: |
+          sudo systemctl stop kali-mcp-agent.service || true
+          if test -f /etc/kali-mcp/stack.env; then
+            sudo docker compose --env-file /etc/kali-mcp/stack.env -f /opt/kali-mcp/current/kali-mcp-hybrid.yml down -v || true
+          fi
+  publish:
+    needs: [validate]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Publish prerelease and checksum assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG=v0.1.0-beta.4
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release already exists; refusing overwrite" >&2
+            exit 1
+          fi
+          cp scripts/install-hybrid.sh install-hybrid.sh
+          sha256sum install-hybrid.sh kali-mcp-hybrid.yml > SHA256SUMS
+          gh release create "$TAG" install-hybrid.sh kali-mcp-hybrid.yml SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Kali MCP v0.1.0-beta.4 — Superuser Security" \
+            --notes-file docs/SECURITY_BETA_RELEASE_NOTES.md --prerelease
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,isPrerelease,tagName
