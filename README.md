@@ -1,5 +1,22 @@
 # Kali MCP
 
+## Systemd hybrid beta — v0.1.0-beta.3 (ARM64 hardware validation pending)
+
+The preferred architecture now uses **a native systemd Kali Host Agent**
+with a **nonprivileged Docker MCP/WebUI Core**, installed with a guided SSH
+Bash wizard. The older privileged-Docker beta.2 remains available.
+
+On the Raspberry Pi, the one-time installer sets up systemd, Docker,
+the administrator account, stable/beta channel, socket permissions and
+Cloudflare/Tailscale options. After installation run **sudo kali-mcp**
+for a terminal dashboard (jobs, audit, capabilities, update checks, root
+toggle and guided remote access).
+
+Read the [hybrid installation and security guide](docs/HYBRID.md) and
+[beta.3 release notes](docs/HYBRID_BETA_RELEASE_NOTES.md).
+This is a lab-device beta, not production hardened. The root Host Agent
+must still be tested on Kali ARM64 before public exposure.
+
 **Self-hosted Kali Linux MCP control plane with modular tools, network management, sandboxed execution, optional host execution and a live WebUI.**
 
 > **Status: v0.1.0-beta.2 — Portainer-ready early beta, not production ready.** Full Docker Compose boot, OAuth client flow, protected MCP tool discovery and a Python sandbox smoke test passed on Linux AMD64. Kali Raspberry Pi 5 ARM64, host-root execution and Cloudflare Access have not yet been validated end to end.
