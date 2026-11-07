@@ -18,7 +18,7 @@ a **superuser username and strong password**, access method and maximum host/roo
 Re-running the installer preserves configuration; --reconfigure reopens the
 wizard, and --non-interactive uses preset environment variables.
 
-Before the first hybrid prerelease, test with a pinned branch commit:
+For development builds, a full commit SHA can be used instead of a release:
 
     sudo KALI_MCP_VERSION=<full-40-character-commit> bash scripts/install-hybrid.sh
 
