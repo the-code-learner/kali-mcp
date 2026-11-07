@@ -69,6 +69,7 @@ def main():
     authorization = get("/authorize?" + urlencode(params))
     assert authorization.status == 303, authorization.read()
     login = post("/login", {
+        "username": os.getenv("KALI_MCP_TEST_SUPERUSER_NAME", "admin"),
         "password": password, "next": "/authorize?" + urlencode(params),
     })
     assert login.status == 303, login.read()
@@ -106,7 +107,25 @@ def main():
     payload = json.load(answer)
     names = [item["name"] for item in payload.get("result", {}).get("tools", [])]
     assert "system_status" in names and "scripts_execute" in names, names
-    print("HTTP OAuth/PKCE + authenticated tools/list succeeded; tool count:", len(names))
+    # A private tool must receive the actual OAuth client identity.
+    # Otherwise two clients might share a fallback "unknown" job namespace.
+    tool_request = Request(base + "/mcp", data=json.dumps({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": "jobs_list", "arguments": {"limit": 1}},
+    }).encode(), method="POST", headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "Authorization": "Bearer " + token,
+        "MCP-Protocol-Version": "2025-06-18",
+    })
+    try:
+        tool_answer = opener.open(tool_request, timeout=30)
+    except HTTPError as exc:
+        raise AssertionError("OAuth-scoped jobs_list failed: " + str(exc.status) + " " + exc.read().decode()[:400]) from exc
+    private_result = json.load(tool_answer)
+    assert "error" not in private_result, private_result
+    assert not private_result.get("result", {}).get("isError"), private_result
+    print("HTTP OAuth/PKCE + tools/list + scoped jobs_list passed; count:", len(names))
 
 
 if __name__ == "__main__":
