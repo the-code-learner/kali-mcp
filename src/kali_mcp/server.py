@@ -115,7 +115,6 @@ def modules_install(tool_id: str) -> dict:
     """WRITE ACTION. Install a reviewed Kali module via apt if explicitly authorized."""
     def compute():
         policy.require("package_install", actor=actor())
-        policy.check_execution("host", root=True, actor=actor())
         installer_argv(tool_id)  # fail before dispatching to broker
         return jobs.submit(actor=actor(), tool_id=tool_id, mode="host-root",
                            operation="package_install", payload={"tool_id": tool_id, "timeout": 300})
