@@ -39,9 +39,24 @@ class Broker:
         self.cfg, self.store = cfg, store
         self.sessions: dict[str, dict] = {}
         self.lock = threading.Lock()
+        self.max_sessions = 8
+        self.max_sessions_per_actor = 2
+        self._reaper = threading.Thread(target=self._expire_terminals, daemon=True,
+                                        name="kali-mcp-pty-reaper")
+        self._reaper.start()
         self.host_user = os.environ.get("KALI_MCP_HOST_USER", "kali")
         if not SAFE_USER.fullmatch(self.host_user):
             raise RuntimeError("Invalid KALI_MCP_HOST_USER")
+
+    def _expire_terminals(self) -> None:
+        # Terminate abandoned PTY process groups even if clients disappear
+        # without issuing terminal_close.
+        while True:
+            time.sleep(30)
+            with self.lock:
+                for session_id, session in list(self.sessions.items()):
+                    if time.monotonic() - session.get("last", 0) > SESSION_TTL:
+                        self._close_session(session_id, session)
 
     def require(self, setting: str, flag: str) -> None:
         if not getattr(self.cfg, flag) or not self.store.get_setting(setting):
@@ -177,6 +192,11 @@ class Broker:
             owner = str(data.get("actor") or "")
             if not owner or len(owner) > 128:
                 raise BrokerDenied("Missing terminal owner")
+            with self.lock:
+                if len(self.sessions) >= self.max_sessions:
+                    raise BrokerDenied("Terminal session quota reached")
+                if sum(1 for item in self.sessions.values() if item.get("actor") == owner) >= self.max_sessions_per_actor:
+                    raise BrokerDenied("Client terminal quota reached")
             command = self._nsenter(["/bin/bash", "--noprofile", "--norc", "-i"], root=root)
             master, slave = pty.openpty()
             proc = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave,
