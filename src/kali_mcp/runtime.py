@@ -6,6 +6,11 @@ import contextlib
 from urllib.parse import urlparse
 import json
 import os
+from collections import deque
+import threading
+import time
+
+from .superuser import read_record
 
 import uvicorn
 from starlette.applications import Starlette
@@ -29,12 +34,50 @@ class SecurityGate:
     def __init__(self, app):
         self.app = app
         self.host = urlparse(cfg.base_url).hostname
+        self._rate_lock = threading.Lock()
+        self._recent: dict[str, deque[float]] = {}
+        self._shared = deque()
+
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         path = scope.get("path", "")
         headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers", [])}
+        method = scope.get("method", "GET").upper()
+        # Limit unauthenticated protocol endpoints, including on a LAN/public bind.
+        if method == "POST" and path in {"/register", "/token", "/authorize", "/login"}:
+            source = str(scope.get("client", ("unknown", 0))[0])
+            now = time.monotonic()
+            with self._rate_lock:
+                history = self._recent.setdefault(source, deque())
+                while history and history[0] < now - 60:
+                    history.popleft()
+                while self._shared and self._shared[0] < now - 60:
+                    self._shared.popleft()
+                excessive = len(history) >= 45 or len(self._shared) >= 240
+                if not excessive:
+                    history.append(now)
+                    self._shared.append(now)
+                if len(self._recent) > 2048:
+                    self._recent.clear()
+            if excessive:
+                return await JSONResponse({"error": "rate_limited"}, status_code=429)(scope, receive, send)
+        if method == "POST":
+            try:
+                size = int(headers.get("content-length", "0"))
+            except ValueError:
+                size = 10000000
+            max_size = 262144 if path.startswith("/mcp") else 16384
+            if size > max_size:
+                return await JSONResponse({"error": "request_too_large"}, status_code=413)(scope, receive, send)
+        # Reject browser cross-origin state-changing requests even when cookies exist.
+        if method == "POST" and path in {"/login", "/authorize", "/logout",
+                                        "/api/v1/settings", "/api/v1/updates/check",
+                                        "/api/v1/updates/install"}:
+            origin = headers.get("origin", "")
+            if origin and origin != cfg.base_url and origin != "http://localhost:8787" and origin != "http://127.0.0.1:8787":
+                return await JSONResponse({"error": "origin_mismatch"}, status_code=403)(scope, receive, send)
         host = headers.get("host", "").split(":", 1)[0].strip("[]")
         if host not in {self.host, "localhost", "127.0.0.1", "::1", "kali-mcp-core"}:
             return await JSONResponse({"error": "Unrecognized Host"}, status_code=400)(scope, receive, send)
@@ -77,8 +120,13 @@ async def lifespan_check():
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
-    if not cfg.admin_password or len(cfg.admin_password) < 16:
-        raise RuntimeError("Set KALI_MCP_ADMIN_PASSWORD to a strong 16+ character value in your private Compose stack")
+    auth_file = os.getenv("KALI_MCP_SUPERUSER_FILE")
+    if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() == "true":
+        if not auth_file:
+            raise RuntimeError("Host Agent mode requires hashed superuser credentials")
+        read_record(__import__("pathlib").Path(auth_file))
+    elif not auth_file and (not cfg.admin_password or len(cfg.admin_password) < 16):
+        raise RuntimeError("Configure a superuser or a legacy Docker-only admin password")
     task = asyncio.create_task(lifespan_check())
     try:
         async with core.mcp.session_manager.run():
@@ -115,7 +163,7 @@ app = SecurityGate(Starlette(
         Route("/token", oauth.token, methods=["POST"]),
         Route("/login", admin.login_get, methods=["GET"]),
         Route("/login", admin.login_post, methods=["POST"]),
-        Route("/logout", admin.logout, methods=["GET"]),
+        Route("/logout", admin.logout, methods=["POST"]),
         Route("/", ui.dashboard, methods=["GET"]),
         Route("/api/v1/status", ui.status, methods=["GET"]),
         Route("/api/v1/settings", ui.settings, methods=["POST"]),
