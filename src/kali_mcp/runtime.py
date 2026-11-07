@@ -92,7 +92,7 @@ class SecurityGate:
                 return await JSONResponse({"error": "rate_limited"}, status_code=429)(scope, receive, safe_send)
 
         if method == "POST" and path in {"/login", "/authorize", "/logout",
-                                        "/api/v1/settings", "/api/v1/updates/check",
+                                        "/api/v1/settings", "/api/v1/clients/revoke", "/api/v1/updates/check",
                                         "/api/v1/updates/install"}:
             origin = headers.get("origin", "")
             if origin and origin not in {cfg.base_url, "http://localhost:8787",
@@ -220,6 +220,7 @@ app = SecurityGate(Starlette(
         Route("/", ui.dashboard, methods=["GET"]),
         Route("/api/v1/status", ui.status, methods=["GET"]),
         Route("/api/v1/settings", ui.settings, methods=["POST"]),
+        Route("/api/v1/clients/revoke", ui.revoke_client, methods=["POST"]),
         Route("/api/v1/updates/check", ui.update_check, methods=["POST"]),
         Route("/api/v1/updates/install", ui.update_install, methods=["POST"]),
         Route("/jobs/{job_id}", ui.job_report, methods=["GET"]),
