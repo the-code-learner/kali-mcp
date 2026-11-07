@@ -312,6 +312,20 @@ class LocalServer(socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def __init__(self, *args, **kwargs):
+        self._clients = threading.BoundedSemaphore(value=12)
+        super().__init__(*args, **kwargs)
+
+    def verify_request(self, request, client_address):
+        # Reject excess IPC clients before creating another handler thread.
+        return self._clients.acquire(blocking=False)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            return super().process_request_thread(request, client_address)
+        finally:
+            self._clients.release()
+
 
 def main():
     cfg = Config.from_env()
