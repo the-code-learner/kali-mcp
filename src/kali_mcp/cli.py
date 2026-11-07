@@ -161,6 +161,32 @@ def update_status(force: bool = False) -> None:
     print("Install action is handled by the versioned installer with rollback.")
 
 
+def upgrade(confirm: bool = True, *, reconfigure: bool = False) -> None:
+    """Operator-driven upgrade using the versioned installer with rollback."""
+    from .cli_config import parse_env
+    current = (ROOT / "current")
+    if not current.is_symlink():
+        raise RuntimeError("No installed source release")
+    installed = current.resolve().name
+    env_values = parse_env(ETC / "stack.env")
+    channel = env_values.get("KALI_MCP_RELEASE_CHANNEL", "beta")
+    print(f"Currently installed: {installed}, release channel: {channel}")
+    if confirm:
+        phrase = "RECONFIGURE" if reconfigure else "UPGRADE"
+        if input(f"Type {phrase} to continue: ").strip() != phrase:
+            print("Cancelled.")
+            return
+    env = os.environ.copy()
+    env["KALI_MCP_RELEASE_CHANNEL"] = channel
+    env["KALI_MCP_VERSION"] = installed if reconfigure else "latest"
+    argv = ["bash", str(current / "scripts/install-hybrid.sh")]
+    argv += ["--reconfigure"] if reconfigure else ["--upgrade"]
+    result = subprocess.run(argv, env=env, check=False)
+    if result.returncode:
+        raise RuntimeError("Installer returned error status " + str(result.returncode))
+    print("Hybrid appliance activation completed.")
+
+
 def apt_install(package: str) -> None:
     if not shutil.which("apt-get"):
         raise RuntimeError("apt-get unavailable on this system")
@@ -254,7 +280,7 @@ def refresh_dashboard() -> None:
     print("\nRECENT JOBS")
     show_jobs(8)
     print("\n  [j] jobs   [a] audit   [g] agent toggles   [r] remote access")
-    print("  [u] update check   [s] services   [q] quit")
+    print("  [u] update check   [p] upgrade   [w] wizard   [s] services   [q] quit")
     print("Refreshes automatically every 5 seconds. Works over SSH.")
 
 
@@ -278,6 +304,10 @@ def dashboard() -> None:
             show_audit(25)
         elif option == "u":
             update_status(True)
+        elif option == "p":
+            upgrade()
+        elif option == "w":
+            upgrade(reconfigure=True)
         elif option == "r":
             access_menu()
         elif option == "g":
@@ -304,6 +334,8 @@ def main() -> None:
     sub.add_parser("audit")
     sub.add_parser("access")
     sub.add_parser("updates")
+    sub.add_parser("upgrade")
+    sub.add_parser("wizard")
     setting = sub.add_parser("toggle")
     setting.add_argument("capability", choices=sorted({"host_exec","host_root","package_install","network_changes"}))
     setting.add_argument("state", choices=["on", "off"])
@@ -325,6 +357,10 @@ def main() -> None:
             access_menu()
         elif args.command == "updates":
             update_status(True)
+        elif args.command == "upgrade":
+            upgrade()
+        elif args.command == "wizard":
+            upgrade(reconfigure=True)
         elif args.command == "toggle":
             set_capability(args.capability, args.state == "on")
     except (BrokerError, RuntimeError, ValueError, subprocess.CalledProcessError) as error:
