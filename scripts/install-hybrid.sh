@@ -69,6 +69,7 @@ fi
 install -d -m 0700 "$CONFIG"
 install -d -m 0755 "$ROOT" "$ROOT/releases"
 install -d -m 0750 -o 10001 -g 10001 "$STATE/core" "$STATE/venv"
+install -d -m 0750 -o root -g 10001 "$STATE/auth"
 
 # Never automatically remove a previous privileged Docker stack.
 if docker ps --format '{{.Names}}' | grep -Fxq kali-mcp-broker; then
@@ -161,7 +162,7 @@ PY
 )"
 TARGET="$ROOT/releases/$SELECTED"
 echo "Staged version: $SELECTED"
-if test ! -f "$CONFIG/stack.env" || test "$RECONFIGURE" = true; then
+if test ! -f "$CONFIG/stack.env" || test ! -f "$CONFIG/superuser.json" || test "$RECONFIGURE" = true; then
   if test "$NONINTERACTIVE" = true; then
     python3 "$TARGET/scripts/wizard.py" --config-dir "$CONFIG" --agent-gid "$GID" --non-interactive
   else
@@ -175,7 +176,14 @@ sed -i "s/^KALI_MCP_HOST_USER=.*/KALI_MCP_HOST_USER=$HOST_USER/" "$CONFIG/agent.
 if ! grep -q "^KALI_MCP_HOST_USER=" "$CONFIG/agent.env"; then
   echo "KALI_MCP_HOST_USER=$HOST_USER" >> "$CONFIG/agent.env"
 fi
-chmod 0600 "$CONFIG"/*.env
+chmod 0600 "$CONFIG"/*.env "$CONFIG/superuser.json"
+# Keep the canonical superuser hash root-only. Core receives an immutable,
+# read-only copy; the Core never receives the password through Docker env.
+install -m 0640 -o root -g 10001 "$CONFIG/superuser.json" "$STATE/auth/superuser.json"
+if ! grep -q '^KALI_MCP_SUPERUSER_FILE=' "$CONFIG/agent.env"; then
+  printf '%s\n' 'KALI_MCP_SUPERUSER_FILE=/etc/kali-mcp/superuser.json' >> "$CONFIG/agent.env"
+fi
+chmod 0600 "$CONFIG/agent.env"
 
 echo 'Installing native Agent Python dependencies'
 if test ! -x "$ROOT/agent-venv/bin/python"; then python3 -m venv "$ROOT/agent-venv"; fi
