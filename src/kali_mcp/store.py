@@ -106,7 +106,11 @@ class Store:
     def new_job(self, actor: str, tool_id: str, mode: str, args: dict) -> str:
         job_id = uuid4().hex
         # Sensitive script bodies and authentication tokens must not land in SQLite.
-        sanitized = {k: ("[REDACTED]" if k in {"password", "token", "script", "command", "content"} else v) for k, v in args.items()}
+        sensitive = {"password", "token", "secret", "api_key", "authorization",
+                     "script", "command", "argv", "input", "content", "env",
+                     "headers", "key", "cookie", "refresh_token", "client_secret"}
+        sanitized = {str(k)[:64]: ("[REDACTED]" if str(k).lower() in sensitive else v)
+                     for k, v in args.items()}
         encoded_args = json.dumps(sanitized, default=str)
         if len(encoded_args) > 8192:
             encoded_args = json.dumps({"truncated": True, "keys": list(sanitized)[:32]})
