@@ -10,6 +10,7 @@ then start the interactive wizard:
 
 ```bash
 curl -fsSL https://github.com/the-code-learner/kali-mcp/releases/download/v0.1.0-beta.4/install-hybrid.sh -o install-hybrid.sh
+curl -fsSL https://github.com/the-code-learner/kali-mcp/releases/download/v0.1.0-beta.4/kali-mcp-hybrid.yml -o kali-mcp-hybrid.yml
 curl -fsSL https://github.com/the-code-learner/kali-mcp/releases/download/v0.1.0-beta.4/SHA256SUMS -o SHA256SUMS
 sha256sum -c SHA256SUMS
 sudo bash install-hybrid.sh
