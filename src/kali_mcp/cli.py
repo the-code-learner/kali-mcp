@@ -136,6 +136,11 @@ def set_capability(name: str, enabled: bool) -> None:
                 store.set_setting("host_root", False, "local-cli")
         finally:
             store.close()
+            for suffix in ("", "-wal", "-shm"):
+                f = CORE / ("app.db" + suffix)
+                if f.exists():
+                    os.chown(f, 10001, 10001)
+                    os.chmod(f, 0o660)
     except Exception:
         broker("settings_set", {"feature": name, "enabled": previous})
         raise
