@@ -52,6 +52,9 @@ class Policy:
         if feature == "host_root" and value and not self.store.get_setting("host_exec"):
             raise PolicyDenied("Enable host execution first")
         self.store.set_setting(feature, value, "webui")
+        if feature == "host_exec" and not value:
+            # Never leave a stale enabled root toggle after host execution is off.
+            self.store.set_setting("host_root", False, "webui")
 
     def check_target(self, target: str) -> str:
         """Resolve a single host, reject any address outside authorized networks.

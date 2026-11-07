@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import html
 import json
+import os
 from pathlib import Path
 import secrets
 import time
@@ -150,12 +151,17 @@ class UI:
         <main><section class="summary"><h2>Status</h2><div id="status">Loading ...</div></section>
         <section><h2>Live activity</h2><p class="muted">MCP calls, broker jobs and results tracked by the job engine.</p>
         <table><thead><tr><th>Tool</th><th>Client</th><th>State</th><th>Result</th></tr></thead><tbody id="jobs">{rows}</tbody></table></section>
-        <section><h2>Execution capabilities</h2><p class="warning">Privileged Docker broker has host-level authority. These switches are authorization controls, not a hardened isolation guarantee.</p>
+        <section><h2>Execution capabilities</h2><p class="warning">Host execution is privileged by design. These switches authorize client operations, not protection from control-plane compromise.</p>
         {''.join(toggles)}</section>
         <section><h2>Updates</h2><p id="updates">Checking ...</p>
         <form method="post" action="/api/v1/updates/check">
         <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}"><button>Check now</button></form>
-        <p class="muted">Update installation is manual. A release is never installed automatically.</p></section>
+        <p class="muted">Updates are checked automatically but NEVER installed without administrator or authorized MCP action.</p>
+        <form method="post" action="/api/v1/updates/install">
+        <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
+        <label><input type="checkbox" name="confirm_update" value="yes" required>
+        I understand this updates the native Agent and Core and restarts services.</label>
+        <button type="submit">Install latest eligible release</button></form></section>
         <section><h2>Audit</h2><pre id="audit">Loading ...</pre></section>
         </main><script src="/static/app.js" defer></script></body></html>"""
         return HTMLResponse(body, headers={"Cache-Control": "no-store",
@@ -189,10 +195,20 @@ class UI:
         enabled = str(form.get("enabled") or "").lower() == "true"
         if enabled and name == "host_root" and str(form.get("disclaimer") or "") != "yes":
             return JSONResponse({"error": "Root disclaimer must be accepted"}, status_code=400)
+        previous = self.store.get_setting(name)
         try:
             self.policy.set_webui(name, enabled)
-        except PolicyDenied as exc:
-            return JSONResponse({"error": str(exc)}, status_code=403)
+            if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() == "true" and name in {
+                    "host_exec", "host_root", "package_install", "network_changes", "mcp_updates"}:
+                from .broker_client import call
+                try:
+                    call(self.cfg.broker_socket, "settings_set",
+                         {"feature": name, "enabled": enabled}, timeout=6)
+                except Exception:
+                    self.store.set_setting(name, previous, "webui-rollback")
+                    raise
+        except (PolicyDenied, Exception) as exc:
+            return JSONResponse({"error": str(exc)[:300]}, status_code=403)
         return RedirectResponse("/", status_code=303)
 
     async def update_check(self, request: Request):
@@ -204,6 +220,28 @@ class UI:
         self.updates.check(force=True)
         self.store.audit("webui", "updates.check", "allow")
         return RedirectResponse("/", status_code=303)
+
+    async def update_install(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        form = await request.form()
+        if (error := self._csrf(request, str(form.get("csrf") or ""))):
+            return error
+        if str(form.get("confirm_update") or "") != "yes":
+            return JSONResponse({"error": "Administrator must confirm upgrade"}, status_code=400)
+        if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() != "true":
+            return JSONResponse({"error": "Native systemd Agent required"}, status_code=403)
+        try:
+            self.policy.require("mcp_updates", actor="webui")
+            tag = self.updates.check(force=True).get("latest")
+            if not tag:
+                return JSONResponse({"error": "No eligible release; check GitHub connectivity"}, status_code=503)
+            result = self.jobs.submit(actor="webui", tool_id="core-upgrade",
+                                      mode="systemd", operation="updates_install", payload={"tag": tag})
+            self.store.audit("webui", "upgrade.request", "allow", tag)
+            return RedirectResponse("/jobs/" + result["job_id"], status_code=303)
+        except (PolicyDenied, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=403)
 
     async def job_report(self, request: Request):
         if (error := self._admin(request)):

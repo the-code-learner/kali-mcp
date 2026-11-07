@@ -115,7 +115,6 @@ def modules_install(tool_id: str) -> dict:
     """WRITE ACTION. Install a reviewed Kali module via apt if explicitly authorized."""
     def compute():
         policy.require("package_install", actor=actor())
-        policy.check_execution("host", root=True, actor=actor())
         installer_argv(tool_id)  # fail before dispatching to broker
         return jobs.submit(actor=actor(), tool_id=tool_id, mode="host-root",
                            operation="package_install", payload={"tool_id": tool_id, "timeout": 300})
@@ -223,13 +222,18 @@ def updates_check() -> dict:
 
 @mcp.tool()
 def updates_install(tag: str) -> dict:
-    """WRITE ACTION. Update installation is withheld until crash-safe supervisor support is validated."""
+    """WRITE ACTION. Manually schedule the latest eligible release through the native systemd Agent."""
     try:
         policy.require("mcp_updates", actor=actor())
     except PolicyDenied as exc:
         return {"ok": False, "error": str(exc)}
-    return {"ok": False, "error": "Release installation not available in this development build; no change was made",
-            "requested_tag": tag}
+    if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() != "true":
+        return {"ok": False, "error": "Upgrade scheduling requires the native systemd Host Agent"}
+    latest = updates.check(force=True).get("latest")
+    if not latest or tag != latest:
+        return {"ok": False, "error": "Only the current latest eligible release can be installed"}
+    return jobs.submit(actor=actor(), tool_id="core-upgrade", mode="systemd",
+                       operation="updates_install", payload={"tag": tag})
 
 
 @mcp.tool()

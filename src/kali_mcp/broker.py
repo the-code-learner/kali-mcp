@@ -230,12 +230,22 @@ class Broker:
     def _close_session(self, key: str, session: dict) -> None:
         proc = session["proc"]
         if proc.poll() is None:
-            proc.terminate()
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             try:
                 proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                proc.kill()
-        os.close(session["master"])
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait(timeout=2)
+        try:
+            os.close(session["master"])
+        except OSError:
+            pass
         self.sessions.pop(key, None)
 
     def dispatch(self, op: str, data: dict) -> dict:
