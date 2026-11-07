@@ -1,0 +1,31 @@
+[Unit]
+Description=Kali MCP Native Host Agent (private Unix control socket)
+Documentation=https://github.com/the-code-learner/kali-mcp
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+ConditionPathExists=/opt/kali-mcp/current/src/kali_mcp/host_agent.py
+
+[Service]
+Type=simple
+User=root
+Group=kalimcp
+WorkingDirectory=/opt/kali-mcp/current
+EnvironmentFile=/etc/kali-mcp/agent.env
+Environment=PYTHONPATH=/opt/kali-mcp/current/src
+ExecStart=/opt/kali-mcp/agent-venv/bin/python -m kali_mcp.host_agent
+Restart=on-failure
+RestartSec=3
+UMask=0007
+RuntimeDirectory=kali-mcp-agent
+RuntimeDirectoryMode=0750
+PrivateTmp=yes
+LimitNOFILE=16384
+TimeoutStopSec=10
+KillMode=control-group
+
+# This service has privileged host access by design. A separate private
+# agent-policy file controls client privileges; it is not a root isolation
+# mechanism against a compromised Core or privileged agent.
+[Install]
+WantedBy=multi-user.target
