@@ -157,6 +157,20 @@ def configure(path: Path, gid: int, *, interactive: bool) -> dict[str, str]:
         origin = "http://localhost:8787"
     if not valid_origin(origin):
         raise ValueError("Invalid canonical HTTPS origin")
+    bind_default = old.get("KALI_MCP_BIND_ADDRESS", "127.0.0.1")
+    bind = (ask("HTTP bind IP (127.0.0.1 or 0.0.0.0)", bind_default,
+                choices={"127.0.0.1", "0.0.0.0"}) if interactive
+            else os.getenv("KALI_MCP_BIND_ADDRESS", bind_default))
+    if bind not in {"127.0.0.1", "0.0.0.0"}:
+        raise ValueError("Invalid bind address")
+    if bind == "0.0.0.0":
+        print("WARNING: 0.0.0.0 exposes an HTTP origin on every network interface.")
+        print("A password alone does not prevent network credential interception.")
+        print("Require a firewall and an HTTPS reverse proxy / Cloudflare Access.")
+        if not origin.startswith("https://"):
+            raise ValueError("Public binding requires a configured HTTPS canonical origin")
+        if interactive and not yesno("I have restricted direct port access by firewall", False):
+            raise ValueError("Refusing unprotected wide-area binding")
 
     previous_allow = old.get("KALI_MCP_ALLOW_HOST_EXEC", "false") == "true"
     host_exec = (yesno("Permit enabling unprivileged Kali HOST commands in WebUI", previous_allow)
@@ -189,6 +203,7 @@ def configure(path: Path, gid: int, *, interactive: bool) -> dict[str, str]:
         "KALI_MCP_UPDATE_CHECK_SECONDS": "21600",
         "KALI_MCP_MAX_JOB_SECONDS": "300",
         "KALI_MCP_PORT": "8787",
+        "KALI_MCP_BIND_ADDRESS": bind,
         "KALI_MCP_ACCESS_MODE": access,
         "KALI_MCP_AGENT_GID": str(gid),
     }
