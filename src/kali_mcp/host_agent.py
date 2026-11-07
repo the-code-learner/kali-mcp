@@ -18,6 +18,9 @@ import shutil
 import socketserver
 import subprocess
 import tempfile
+from uuid import uuid4
+
+from .releases import query_releases, select_release
 import threading
 
 from .broker import Broker, BrokerDenied, Handler, LocalServer
@@ -25,7 +28,7 @@ from .config import Config
 from .registry import installer_argv
 
 
-CAPABILITIES = frozenset({"host_exec", "host_root", "package_install", "network_changes"})
+CAPABILITIES = frozenset({"host_exec", "host_root", "package_install", "network_changes", "mcp_updates"})
 STATE_PATH = Path(os.getenv("KALI_MCP_AGENT_STATE", "/etc/kali-mcp/agent-state.json"))
 AGENT_GROUP = os.getenv("KALI_MCP_AGENT_GROUP", "kalimcp")
 
@@ -111,6 +114,27 @@ class NativeAgent(Broker):
             self.store.set_setting(key, enabled, self.cfg)
             self.store.audit("admin", "settings_set", "allow", key)
             return {"ok": True, "settings": self.store.settings()}
+        if op == "updates_install":
+            self.require("mcp_updates", "allow_mcp_updates")
+            requested = str(data.get("tag", ""))
+            if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+)?", requested):
+                raise BrokerDenied("Invalid release tag")
+            selected = select_release(query_releases(self.cfg.repo), self.cfg.update_channel)
+            if not selected or selected.tag != requested:
+                raise BrokerDenied("Only the latest eligible GitHub Release can be installed")
+            unit = "kali-mcp-update-" + uuid4().hex[:12]
+            # A detached transient unit survives the Agent and Core being restarted
+            # by their own installer. The command and tag are bounded, never supplied
+            # as arbitrary executable text by a client.
+            command = ["systemd-run", "--collect", "--unit=" + unit,
+                "--setenv=KALI_MCP_VERSION=" + requested,
+                "--setenv=KALI_MCP_RELEASE_CHANNEL=" + self.cfg.update_channel,
+                "/bin/bash", "/opt/kali-mcp/current/scripts/install-hybrid.sh", "--upgrade"]
+            result = self._run(command, timeout=20)
+            if result.get("exit_code") != 0:
+                raise BrokerDenied("systemd could not schedule the upgrade")
+            self.store.audit("admin", "update.schedule", "allow", requested)
+            return {"ok": True, "scheduled": True, "unit": unit, "tag": requested}
         if op == "package_install":
             # Installing a reviewed package requires explicit package consent,
             # but not permission to open an unrestricted root terminal.
