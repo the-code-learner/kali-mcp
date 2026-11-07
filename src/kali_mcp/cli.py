@@ -20,12 +20,43 @@ from .broker_client import BrokerError, call
 from .config import Config
 from .store import Store
 from .releases import UpdateChecker
+from .superuser import DEFAULT_HOST_FILE, read_record, verify
 
 ROOT = Path("/opt/kali-mcp")
 ETC = Path("/etc/kali-mcp")
 CORE = Path("/var/lib/kali-mcp/core")
 COMPOSE = ROOT / "current" / "kali-mcp-hybrid.yml"
 SOCKET = Path("/run/kali-mcp-agent/agent.sock")
+AUTH_USER: str = ""
+AUTH_PASSWORD: str = ""
+
+
+def authenticate_local_superuser() -> None:
+    """Second factor after OS sudo: the same named superuser as the WebUI."""
+    global AUTH_USER, AUTH_PASSWORD
+    file = Path(os.getenv("KALI_MCP_SUPERUSER_FILE", str(DEFAULT_HOST_FILE)))
+    record = read_record(file)
+    secret_file = os.getenv("KALI_MCP_CLI_PASSWORD_FILE")
+    if secret_file:
+        # Optional root-only secret file for CI/unattended LOCAL automation.
+        # Never accept a password in argv or environment variable values.
+        candidate = Path(secret_file)
+        st = candidate.lstat()
+        if candidate.is_symlink() or st.st_uid != 0 or st.st_mode & 0o777 != 0o600:
+            raise RuntimeError("CLI password file must be root-owned mode 0600")
+        candidate_password = candidate.read_text(encoding="utf-8").rstrip("\n")
+        requested_user = record["username"]
+    else:
+        if not sys.stdin.isatty():
+            raise RuntimeError("Interactive SSH TTY required for CLI login")
+        requested_user = input("Kali MCP superuser username: ").strip()
+        candidate_password = getpass.getpass("Kali MCP superuser password: ")
+    if not verify(record, requested_user, candidate_password):
+        raise RuntimeError("Superuser authentication failed")
+    AUTH_USER, AUTH_PASSWORD = requested_user, candidate_password
+
+
+
 
 
 def run(*argv: str, check: bool = False, capture: bool = False):
@@ -127,7 +158,8 @@ def set_capability(name: str, enabled: bool) -> None:
             return
     # Agent policy is authoritative and stored in a root-owned host file.
     previous = broker("settings_get")["settings"].get(name, False)
-    broker("settings_set", {"feature": name, "enabled": enabled})
+    broker("settings_set", {"feature": name, "enabled": enabled,
+                            "superuser_name": AUTH_USER, "superuser_password": AUTH_PASSWORD})
     try:
         store = data_store()
         try:
@@ -142,7 +174,8 @@ def set_capability(name: str, enabled: bool) -> None:
                     os.chown(f, 10001, 10001)
                     os.chmod(f, 0o660)
     except Exception:
-        broker("settings_set", {"feature": name, "enabled": previous})
+        broker("settings_set", {"feature": name, "enabled": previous,
+                                "superuser_name": AUTH_USER, "superuser_password": AUTH_PASSWORD})
         raise
     print(f"{name}: {'ENABLED' if enabled else 'disabled'}")
 
@@ -387,6 +420,7 @@ def main() -> None:
     if os.geteuid() != 0:
         raise SystemExit("Use sudo kali-mcp to access the local host dashboard")
     try:
+        authenticate_local_superuser()
         if args.command in (None, "dashboard"):
             dashboard()
         elif args.command == "status":
