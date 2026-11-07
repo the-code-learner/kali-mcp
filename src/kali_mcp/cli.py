@@ -117,7 +117,7 @@ def show_audit(limit: int = 15) -> None:
 
 
 def set_capability(name: str, enabled: bool) -> None:
-    if name not in {"host_exec", "host_root", "package_install", "network_changes"}:
+    if name not in {"host_exec", "host_root", "package_install", "network_changes", "mcp_updates"}:
         raise ValueError("Unknown capability")
     if enabled and name == "host_root":
         print("\nWARNING: root terminal access allows complete control of Kali,")
@@ -187,6 +187,37 @@ def upgrade(confirm: bool = True, *, reconfigure: bool = False) -> None:
     print("Hybrid appliance activation completed.")
 
 
+def set_public_origin(origin: str) -> None:
+    """Update host + Core OAuth origin together and restart both services."""
+    from .cli_config import set_value
+    parsed = urlparse(origin)
+    if (parsed.scheme != "https" or not parsed.hostname or parsed.path not in ("", "/")
+            or parsed.username or parsed.password or parsed.query or parsed.fragment):
+        raise ValueError("Expected a canonical https://hostname origin with no path")
+    origin = origin.rstrip("/")
+    print("OAuth issuer and token audience will change to", origin)
+    print("Existing OAuth sessions for the old origin may require reauthorization.")
+    if input("Type CHANGE ORIGIN to apply and restart services: ").strip() != "CHANGE ORIGIN":
+        print("Unchanged.")
+        return
+    paths = (ETC / "stack.env", ETC / "agent.env")
+    old = {path: path.read_bytes() for path in paths}
+    try:
+        for path in paths:
+            set_value(path, "KALI_MCP_PUBLIC_URL", origin)
+        run("systemctl", "restart", "kali-mcp-agent.service", check=True)
+        run("docker", "compose", "--env-file", str(ETC / "stack.env"),
+            "-f", str(COMPOSE), "up", "-d", "--force-recreate",
+            "--wait", "--wait-timeout", "300", check=True)
+    except Exception:
+        for path, content in old.items():
+            path.write_bytes(content)
+            path.chmod(0o600)
+        run("systemctl", "restart", "kali-mcp-agent.service")
+        raise
+    print("Public OAuth origin updated. MCP URL:", origin + "/mcp")
+
+
 def apt_install(package: str) -> None:
     if not shutil.which("apt-get"):
         raise RuntimeError("apt-get unavailable on this system")
@@ -207,8 +238,18 @@ def setup_tailscale() -> None:
     if input("Expose local WebUI via private Tailscale Serve? [y/N]: ").strip().lower() == "y":
         run("tailscale", "serve", "--bg", "http://127.0.0.1:8787", check=True)
         run("tailscale", "serve", "status")
-        print("Use the HTTPS hostname printed by Tailscale Serve. Configure it as")
-        print("KALI_MCP_PUBLIC_URL in the wizard, then restart the Core service.")
+        details = run("tailscale", "status", "--json", capture=True)
+        try:
+            dns = json.loads(details.stdout)["Self"]["DNSName"].rstrip(".")
+        except (ValueError, KeyError, TypeError):
+            dns = ""
+        if dns.endswith(".ts.net"):
+            print("Private tailnet OAuth URL:", "https://" + dns + "/mcp")
+            if input("Set this HTTPS hostname as the MCP OAuth origin? [y/N]: ").strip().lower() == "y":
+                set_public_origin("https://" + dns)
+        else:
+            print("Unable to discover Tailscale DNS hostname; check MagicDNS and HTTPS.")
+        print("Tailscale Serve is private: hosted ChatGPT cannot connect from outside the tailnet.")
     print("Hosted ChatGPT/Codex outside your tailnet cannot access Tailscale Serve.")
     print("For public MCP OAuth, configure Cloudflare Tunnel (preferred).")
 
@@ -257,6 +298,9 @@ def setup_cloudflare() -> None:
     run("systemctl", "enable", "--now", "kali-mcp-cloudflared.service", check=True)
     print("Tunnel enabled. Configure the public hostname to forward to")
     print("http://127.0.0.1:8787 and set KALI_MCP_PUBLIC_URL to its HTTPS origin.")
+    hostname = input("HTTPS hostname for Cloudflare Tunnel (or Enter to keep current): ").strip()
+    if hostname:
+        set_public_origin(hostname)
 
 
 def access_menu() -> None:
