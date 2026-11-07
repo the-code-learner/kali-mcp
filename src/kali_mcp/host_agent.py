@@ -112,6 +112,14 @@ class NativeAgent(Broker):
             if not isinstance(key, str) or type(enabled) is not bool:
                 raise BrokerDenied("Invalid capability value")
             self.store.set_setting(key, enabled, self.cfg)
+            if not enabled and key in {"host_exec", "host_root"}:
+                # Revocation is immediate for terminals still owned by the Agent.
+                # A full root shell can spawn work outside the tracked session;
+                # root is not a sandbox or complete process containment.
+                with self.lock:
+                    for session_id, session in list(self.sessions.items()):
+                        if key == "host_exec" or session["root"]:
+                            self._close_session(session_id, session)
             self.store.audit("admin", "settings_set", "allow", key)
             return {"ok": True, "settings": self.store.settings()}
         if op == "updates_install":
