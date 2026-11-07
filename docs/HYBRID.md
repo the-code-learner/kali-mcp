@@ -80,6 +80,19 @@ There is no guarantee of zero unauthorized access, especially with unrestricted
 host root enabled. Cloudflare Access with MFA, a restrictive firewall, regular
 security patching and testing of real client OAuth flows remain necessary.
 
+## Manage MCP client access
+
+The WebUI shows registered OAuth MCP clients and provides a CSRF-protected
+**Revoke access** action. The SSH CLI offers:
+
+    sudo kali-mcp clients
+    sudo kali-mcp client-revoke <32-character-client-id>
+
+Both routes require a superuser login; CLI additionally requires sudo.
+Revocation invalidates bearer tokens, refresh tokens and unused authorization
+codes for that client. Changing the superuser password invalidates all
+existing client OAuth tokens and browser sessions.
+
 ## Trust boundaries
 
 - Core runs as UID 10001 in Docker: no privileged, no Docker socket, no host
