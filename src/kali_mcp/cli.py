@@ -74,8 +74,19 @@ def broker(op: str, data: dict | None = None) -> dict:
     return call(SOCKET, op, data or {}, timeout=15)
 
 
+def _restore_core_sqlite_owner() -> None:
+    # CLI runs under sudo, while API Core uses uid/gid 10001.
+    for suffix in ("", "-wal", "-shm"):
+        item = CORE / ("app.db" + suffix)
+        if item.exists():
+            os.chown(item, 10001, 10001)
+            os.chmod(item, 0o660)
+
+
 def data_store() -> Store:
-    return Store(CORE / "app.db")
+    state = Store(CORE / "app.db")
+    _restore_core_sqlite_owner()
+    return state
 
 
 def print_status() -> None:
