@@ -68,7 +68,9 @@ def password(existing: str | None, *, interactive: bool) -> str:
         if not interactive or yesno("Keep existing administrator password", True):
             return existing
     if not interactive:
-        candidate = os.getenv("KALI_MCP_ADMIN_PASSWORD") or secrets.token_urlsafe(32)
+        candidate = os.getenv("KALI_MCP_ADMIN_PASSWORD")
+        if not candidate:
+            raise ValueError("Non-interactive install requires KALI_MCP_ADMIN_PASSWORD in the environment")
         if not SAFE_VALUE.fullmatch(candidate) or len(candidate) < 16:
             raise ValueError("Administrator password must be 16+ printable URL-safe characters")
         return candidate
