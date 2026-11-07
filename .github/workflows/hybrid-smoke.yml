@@ -44,8 +44,8 @@ jobs:
           sudo ls -la /run/kali-mcp-agent || true
           echo "Unix socket permissions:"
           sudo stat -c '%F %a %U %G %n' /run/kali-mcp-agent/agent.sock || true
-          test -S /run/kali-mcp-agent/agent.sock
-          stat -c '%a %U %G' /run/kali-mcp-agent/agent.sock
+          sudo test -S /run/kali-mcp-agent/agent.sock
+          sudo stat -c '%a %U %G' /run/kali-mcp-agent/agent.sock
           test "$(docker inspect --format '{{.HostConfig.Privileged}}' kali-mcp-core)" = false
           test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
           sudo kali-mcp status
