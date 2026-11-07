@@ -1,0 +1,32 @@
+name: Publish hybrid beta 3
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/publish-hybrid-beta.yml]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest PyYAML
+      - run: pytest -q
+      - run: bash -n scripts/install-hybrid.sh
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish beta release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp scripts/install-hybrid.sh install-hybrid.sh
+          sha256sum install-hybrid.sh kali-mcp-hybrid.yml > SHA256SUMS
+          gh release create v0.1.0-beta.3 install-hybrid.sh kali-mcp-hybrid.yml SHA256SUMS --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Kali MCP v0.1.0-beta.3 Hybrid" --notes-file docs/HYBRID_BETA_RELEASE_NOTES.md --prerelease
