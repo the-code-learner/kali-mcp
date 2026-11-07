@@ -87,8 +87,12 @@ def test_disabling_root_revokes_only_root_sessions(tmp_path, monkeypatch):
     assert agent.store.get_setting("host_root") is False
 
 
-def test_webui_disabling_host_exec_resets_root(configured):
-    cfg, store = configured
+def test_webui_disabling_host_exec_resets_root(tmp_path, monkeypatch):
+    from kali_mcp.store import Store
+    monkeypatch.setenv("KALI_MCP_ALLOW_HOST_EXEC", "true")
+    monkeypatch.setenv("KALI_MCP_ALLOW_HOST_ROOT", "true")
+    cfg = Config.from_env()
+    store = Store(tmp_path / "app.db")
     from kali_mcp.policy import Policy
     p = Policy(cfg, store)
     p.set_webui("host_exec", True)
