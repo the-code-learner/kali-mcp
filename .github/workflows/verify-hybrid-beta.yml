@@ -19,11 +19,10 @@ jobs:
           sha256sum -c SHA256SUMS
           bash -n install-hybrid.sh
       - name: Run exact release installer using latest beta
-        env:
-          KALI_MCP_ADMIN_PASSWORD: "CI_HYBRID_RELEASE_VERIFY_PASSWORD_2026"
-          KALI_MCP_ACCESS_MODE: local
-          KALI_MCP_RELEASE_CHANNEL: beta
-        run: sudo -E bash install-hybrid.sh --non-interactive
+        run: |
+          sudo env KALI_MCP_ADMIN_PASSWORD=CI_HYBRID_RELEASE_VERIFY_PASSWORD_2026 \
+            KALI_MCP_ACCESS_MODE=local KALI_MCP_RELEASE_CHANNEL=beta \
+            bash install-hybrid.sh --non-interactive
       - name: Verify native Agent, Core, OAuth, policy and sandbox
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: "CI_HYBRID_RELEASE_VERIFY_PASSWORD_2026"
