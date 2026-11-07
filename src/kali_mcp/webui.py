@@ -200,6 +200,7 @@ class UI:
               <div><strong>{html.escape(key.replace('_', ' ').title())}</strong>
               <div class="muted">Deployment ceiling: <code>{variable}</code> = {'true' if allowed else 'false'}</div></div>
               {note if not active else ''}
+              {('<label>Confirm superuser password<input type="password" name="superuser_password" required autocomplete="current-password"></label>' if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() == "true" and key in {"host_exec","host_root","package_install","network_changes","mcp_updates"} else '')}
               <button type="submit" {disabled}>{'Disable' if active else 'Enable'}</button>
             </form>""")
         rows = "".join(f"<tr><td>{html.escape(j['tool_id'])}</td><td>{html.escape(j['actor'])}</td><td>{html.escape(j['state'])}</td><td><a href='/jobs/{j['id']}'>{j['id'][:12]}</a></td></tr>"
@@ -264,8 +265,13 @@ class UI:
                     "host_exec", "host_root", "package_install", "network_changes", "mcp_updates"}:
                 from .broker_client import call
                 try:
+                    provided = str(form.get("superuser_password") or "")
+                    if not provided:
+                        raise PolicyDenied("Confirm superuser password to change host permissions")
                     call(self.cfg.broker_socket, "settings_set",
-                         {"feature": name, "enabled": enabled}, timeout=6)
+                         {"feature": name, "enabled": enabled,
+                          "superuser_name": request.state.admin_username,
+                          "superuser_password": provided}, timeout=15)
                 except Exception:
                     self.store.set_setting(name, previous, "webui-rollback")
                     raise
