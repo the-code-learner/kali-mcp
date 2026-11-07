@@ -1,19 +1,28 @@
 # Kali MCP
 
-## Systemd hybrid beta — v0.1.0-beta.3 (ARM64 hardware validation pending)
+## Systemd hybrid beta — v0.1.0-beta.4 (superuser + access hardening)
 
 The preferred architecture now uses **a native systemd Kali Host Agent**
 with a **nonprivileged Docker MCP/WebUI Core**, installed with a guided SSH
 Bash wizard. The older privileged-Docker beta.2 remains available.
 
 On the Raspberry Pi, the one-time installer sets up systemd, Docker,
-the administrator account, stable/beta channel, socket permissions and
+a named application superuser, stable/beta channel, socket permissions and
 Cloudflare/Tailscale options. After installation run **sudo kali-mcp**
-for a terminal dashboard (jobs, audit, capabilities, update checks, root
+and authenticate with the same superuser as the WebUI for the SSH dashboard (jobs, audit, capabilities, update checks, root
 toggle and guided remote access).
 
 Read the [hybrid installation and security guide](docs/HYBRID.md) and
-[beta.3 release notes](docs/HYBRID_BETA_RELEASE_NOTES.md).
+[beta.4 security release notes](docs/SECURITY_BETA_RELEASE_NOTES.md).
+The hybrid Core no longer receives a plaintext admin password through
+Docker. The wizard hashes superuser credentials, and Host Agent permission
+changes require a fresh superuser proof. When binding to `0.0.0.0`, HTTPS
+at the edge and a restrictive firewall remain mandatory; a password alone
+cannot make direct HTTP safe.
+
+**Upgrading from beta.3:** download and run the beta.4 installer once to migrate
+credentials; beta.3's built-in update command cannot perform that migration.
+
 This is a lab-device beta, not production hardened. The root Host Agent
 must still be tested on Kali ARM64 before public exposure.
 

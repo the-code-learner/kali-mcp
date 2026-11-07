@@ -11,6 +11,10 @@ import os
 from pathlib import Path
 import re
 import secrets
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from kali_mcp.superuser import make_record, read_record, save_record, verify, valid_username, validate_password
 from urllib.parse import urlparse
 
 ENV = re.compile(r"^([A-Z][A-Z0-9_]*)=([^\r\n]*)$")
@@ -63,29 +67,51 @@ def yesno(question: str, default: bool = False) -> bool:
     return ask(question + " (y/n)", initial, choices={"y", "n"}) == "y"
 
 
-def password(existing: str | None, *, interactive: bool) -> str:
-    if existing:
-        if not interactive or yesno("Keep existing administrator password", True):
-            return existing
-    if not interactive:
-        candidate = os.getenv("KALI_MCP_ADMIN_PASSWORD")
-        if not candidate:
-            raise ValueError("Non-interactive install requires KALI_MCP_ADMIN_PASSWORD in the environment")
-        if not SAFE_VALUE.fullmatch(candidate) or len(candidate) < 16:
-            raise ValueError("Administrator password must be 16+ printable URL-safe characters")
-        return candidate
-    if yesno("Generate a secure 43-character administrator password", True):
-        candidate = secrets.token_urlsafe(32)
-        print("\nSave this password now; it will NOT be shown again:")
-        print(candidate + "\n")
-        return candidate
-    while True:
-        candidate = getpass.getpass("Administrator password (16+ URL-safe characters): ")
-        again = getpass.getpass("Confirm administrator password: ")
-        if candidate != again or len(candidate) < 16 or not SAFE_VALUE.fullmatch(candidate):
-            print("Passwords must match, contain 16+ characters and avoid spaces/$/quotes.")
-            continue
-        return candidate
+def setup_superuser(path: Path, old: dict[str, str], *, interactive: bool) -> str:
+    """Create/retain the single local superuser for WebUI and CLI.
+
+    Never write the plaintext password to Compose or systemd environments.
+    """
+    credential_file = path / "superuser.json"
+    if credential_file.is_file():
+        record = read_record(credential_file)
+        username = record["username"]
+        if not interactive:
+            return username
+        print("\nExisting Kali MCP superuser:", username)
+        prior = getpass.getpass("Confirm existing superuser password: ")
+        if not verify(record, username, prior):
+            raise ValueError("Superuser reconfiguration denied")
+        if yesno("Keep current superuser credentials", True):
+            return username
+        suggested = username
+    else:
+        suggested = "admin"
+
+    username = (ask("Create superuser username", suggested)
+                if interactive else os.getenv("KALI_MCP_SUPERUSER_NAME", suggested))
+    if not valid_username(username):
+        raise ValueError("Invalid superuser name (3-32 lowercase letters/digits/._-)")
+    if interactive:
+        if yesno("Generate a strong superuser password", True):
+            pw = secrets.token_urlsafe(36)
+            print("\nSave your superuser password securely; displayed ONCE:")
+            print(pw + "\n")
+        else:
+            pw = getpass.getpass("Superuser password (16+ characters): ")
+            confirm = getpass.getpass("Repeat superuser password: ")
+            if pw != confirm:
+                raise ValueError("Passwords do not match")
+    else:
+        # Existing beta installs used an admin password inside stack.env.
+        # Migrate that credential to a slow hash, then remove plaintext.
+        pw = os.getenv("KALI_MCP_ADMIN_PASSWORD") or old.get("KALI_MCP_ADMIN_PASSWORD", "")
+        if not pw:
+            raise ValueError("Noninteractive bootstrap requires an initial superuser password")
+    validate_password(pw)
+    save_record(credential_file, make_record(username, pw))
+    return username
+
 
 
 def write_private(path: Path, data: dict[str, str]) -> None:
@@ -131,6 +157,20 @@ def configure(path: Path, gid: int, *, interactive: bool) -> dict[str, str]:
         origin = "http://localhost:8787"
     if not valid_origin(origin):
         raise ValueError("Invalid canonical HTTPS origin")
+    bind_default = old.get("KALI_MCP_BIND_ADDRESS", "127.0.0.1")
+    bind = (ask("HTTP bind IP (127.0.0.1 or 0.0.0.0)", bind_default,
+                choices={"127.0.0.1", "0.0.0.0"}) if interactive
+            else os.getenv("KALI_MCP_BIND_ADDRESS", bind_default))
+    if bind not in {"127.0.0.1", "0.0.0.0"}:
+        raise ValueError("Invalid bind address")
+    if bind == "0.0.0.0":
+        print("WARNING: 0.0.0.0 exposes an HTTP origin on every network interface.")
+        print("A password alone does not prevent network credential interception.")
+        print("Require a firewall and an HTTPS reverse proxy / Cloudflare Access.")
+        if not origin.startswith("https://"):
+            raise ValueError("Public binding requires a configured HTTPS canonical origin")
+        if interactive and not yesno("I have restricted direct port access by firewall", False):
+            raise ValueError("Refusing unprotected wide-area binding")
 
     previous_allow = old.get("KALI_MCP_ALLOW_HOST_EXEC", "false") == "true"
     host_exec = (yesno("Permit enabling unprivileged Kali HOST commands in WebUI", previous_allow)
@@ -148,7 +188,7 @@ def configure(path: Path, gid: int, *, interactive: bool) -> dict[str, str]:
                        old.get("KALI_MCP_ALLOW_MCP_UPDATES", "false") == "true")
                        if interactive else os.getenv("KALI_MCP_ALLOW_MCP_UPDATES",
                        old.get("KALI_MCP_ALLOW_MCP_UPDATES", "false")) == "true")
-    pw = password(old.get("KALI_MCP_ADMIN_PASSWORD"), interactive=interactive)
+    username = setup_superuser(path, old, interactive=interactive)
     shared = {
         "KALI_MCP_PUBLIC_URL": origin,
         "KALI_MCP_RELEASE_CHANNEL": channel,
@@ -163,20 +203,22 @@ def configure(path: Path, gid: int, *, interactive: bool) -> dict[str, str]:
         "KALI_MCP_UPDATE_CHECK_SECONDS": "21600",
         "KALI_MCP_MAX_JOB_SECONDS": "300",
         "KALI_MCP_PORT": "8787",
+        "KALI_MCP_BIND_ADDRESS": bind,
         "KALI_MCP_ACCESS_MODE": access,
         "KALI_MCP_AGENT_GID": str(gid),
     }
     for name, value in shared.items():
         if not SAFE_VALUE.fullmatch(value):
             raise ValueError("Invalid configuration value for " + name)
-    write_private(path / "stack.env", {**shared, "KALI_MCP_ADMIN_PASSWORD": pw})
+    write_private(path / "stack.env", shared)
     host = {k: value for k, value in shared.items()
             if k.startswith("KALI_MCP_") and k not in {"KALI_MCP_ACCESS_MODE", "KALI_MCP_PORT", "KALI_MCP_AGENT_GID"}}
     host["KALI_MCP_BROKER_SOCKET"] = "/run/kali-mcp-agent/agent.sock"
     host["KALI_MCP_AGENT_GROUP"] = "kalimcp"
     host["KALI_MCP_HOST_USER"] = "kali"
     write_private(path / "agent.env", host)
-    print("\nConfiguration saved to /etc/kali-mcp (mode 0600).")
+    print("\nConfiguration saved with hashed superuser credentials (no plaintext password in Compose).")
+    print("WebUI and kali-mcp CLI superuser:", username)
     print("Channel:", channel, "| Remote access:", access, "| OAuth base URL:", origin)
     print("Root ceiling:", root, "| Root active by default: false")
     return shared

@@ -26,7 +26,7 @@ def test_long_tool_output_preserves_valid_json(tmp_path):
     store.job_state(job_id, "completed", result={"ok": True,
         "stdout": "A" * 100000, "stderr": "B" * 100000})
     loaded = store.get_job(job_id)
-    assert loaded["args"]["truncated"] is True
+    assert loaded["args"]["argv"] == "[REDACTED]"
     assert loaded["result"]["truncated"] is True
     assert len(loaded["result"]["stdout"]) == 24000
     assert len(loaded["result"]["stderr"]) == 24000

@@ -69,6 +69,7 @@ fi
 install -d -m 0700 "$CONFIG"
 install -d -m 0755 "$ROOT" "$ROOT/releases"
 install -d -m 0750 -o 10001 -g 10001 "$STATE/core" "$STATE/venv"
+install -d -m 0750 -o root -g 10001 "$STATE/auth"
 
 # Never automatically remove a previous privileged Docker stack.
 if docker ps --format '{{.Names}}' | grep -Fxq kali-mcp-broker; then
@@ -161,7 +162,11 @@ PY
 )"
 TARGET="$ROOT/releases/$SELECTED"
 echo "Staged version: $SELECTED"
-if test ! -f "$CONFIG/stack.env" || test "$RECONFIGURE" = true; then
+OLD_SUPERUSER_FINGERPRINT="absent"
+if test -f "$CONFIG/superuser.json"; then
+  OLD_SUPERUSER_FINGERPRINT="$(sha256sum "$CONFIG/superuser.json" | cut -d' ' -f1)"
+fi
+if test ! -f "$CONFIG/stack.env" || test ! -f "$CONFIG/superuser.json" || test "$RECONFIGURE" = true; then
   if test "$NONINTERACTIVE" = true; then
     python3 "$TARGET/scripts/wizard.py" --config-dir "$CONFIG" --agent-gid "$GID" --non-interactive
   else
@@ -175,7 +180,33 @@ sed -i "s/^KALI_MCP_HOST_USER=.*/KALI_MCP_HOST_USER=$HOST_USER/" "$CONFIG/agent.
 if ! grep -q "^KALI_MCP_HOST_USER=" "$CONFIG/agent.env"; then
   echo "KALI_MCP_HOST_USER=$HOST_USER" >> "$CONFIG/agent.env"
 fi
-chmod 0600 "$CONFIG"/*.env
+chmod 0600 "$CONFIG"/*.env "$CONFIG/superuser.json"
+# Keep the canonical superuser hash root-only. Core receives an immutable,
+# read-only copy; the Core never receives the password through Docker env.
+install -m 0640 -o root -g 10001 "$CONFIG/superuser.json" "$STATE/auth/superuser.json"
+if ! grep -q '^KALI_MCP_SUPERUSER_FILE=' "$CONFIG/agent.env"; then
+  printf '%s\n' 'KALI_MCP_SUPERUSER_FILE=/etc/kali-mcp/superuser.json' >> "$CONFIG/agent.env"
+fi
+chmod 0600 "$CONFIG/agent.env"
+NEW_SUPERUSER_FINGERPRINT="$(sha256sum "$CONFIG/superuser.json" | cut -d' ' -f1)"
+if test "$NEW_SUPERUSER_FINGERPRINT" != "$OLD_SUPERUSER_FINGERPRINT" && test -f "$STATE/core/app.db"; then
+  echo 'Superuser changed or migrated: revoking outstanding WebUI sessions and MCP OAuth tokens'
+  KALI_MCP_CORE_DB="$STATE/core/app.db" python3 - <<'PY'
+import os, sqlite3
+db = sqlite3.connect(os.environ["KALI_MCP_CORE_DB"], timeout=20)
+try:
+    db.execute("PRAGMA busy_timeout=20000")
+    with db:
+        db.execute("UPDATE oauth_tokens SET revoked=1")
+        db.execute("DELETE FROM oauth_codes")
+        db.execute("DELETE FROM admin_sessions")
+finally:
+    db.close()
+PY
+  for file in "$STATE/core/app.db" "$STATE/core/app.db-wal" "$STATE/core/app.db-shm"; do
+    if test -e "$file"; then chown 10001:10001 "$file"; fi
+  done
+fi
 
 echo 'Installing native Agent Python dependencies'
 if test ! -x "$ROOT/agent-venv/bin/python"; then python3 -m venv "$ROOT/agent-venv"; fi

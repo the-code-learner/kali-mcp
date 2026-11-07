@@ -16,14 +16,27 @@ class Jobs:
         self.pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="kali-mcp-job")
         self._running = set()
         self._lock = Lock()
+        self._pending: dict[str, int] = {}
+        self.max_pending = 24
+        self.max_per_actor = 6
 
     def submit(self, *, actor: str, tool_id: str, mode: str, operation: str, payload: dict) -> dict:
-        job_id = self.store.new_job(actor, tool_id, mode, payload)
-        self.store.audit(actor, "job.submit", "allow", f"{job_id}:{tool_id}")
-        self.pool.submit(self._worker, job_id, operation, payload)
+        with self._lock:
+            if sum(self._pending.values()) >= self.max_pending:
+                raise ValueError("Job queue full")
+            if self._pending.get(actor, 0) >= self.max_per_actor:
+                raise ValueError("Client job quota exceeded")
+            self._pending[actor] = self._pending.get(actor, 0) + 1
+            try:
+                job_id = self.store.new_job(actor, tool_id, mode, payload)
+                self.store.audit(actor, "job.submit", "allow", f"{job_id}:{tool_id}")
+                self.pool.submit(self._worker, job_id, operation, payload, actor)
+            except BaseException:
+                self._pending[actor] -= 1
+                raise
         return {"ok": True, "job_id": job_id, "state": "queued"}
 
-    def _worker(self, job_id: str, operation: str, payload: dict) -> None:
+    def _worker(self, job_id: str, operation: str, payload: dict, actor: str) -> None:
         with self._lock:
             self._running.add(job_id)
         self.store.job_state(job_id, "running")
@@ -39,6 +52,9 @@ class Jobs:
         finally:
             with self._lock:
                 self._running.discard(job_id)
+                self._pending[actor] = max(0, self._pending.get(actor, 1) - 1)
+                if not self._pending[actor]:
+                    self._pending.pop(actor, None)
 
     def status(self, job_id: str) -> dict:
         result = self.store.get_job(job_id)

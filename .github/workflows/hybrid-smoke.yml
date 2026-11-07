@@ -36,6 +36,9 @@ jobs:
             KALI_MCP_ACCESS_MODE=local \
             KALI_MCP_RELEASE_CHANNEL=beta \
             bash scripts/install-hybrid.sh --non-interactive
+      - name: Prepare root-only CLI test credential
+        run: |
+          sudo sh -c 'umask 077; printf "%s\\n" CI_HYBRID_PASSWORD_TEST_ONLY_2026 > /run/kali-mcp-cli-test-password'
       - name: Validate systemd service and nonprivileged Compose
         run: |
           set -euo pipefail
@@ -48,8 +51,31 @@ jobs:
           sudo stat -c '%a %U %G' /run/kali-mcp-agent/agent.sock
           test "$(docker inspect --format '{{.HostConfig.Privileged}}' kali-mcp-core)" = false
           test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
-          sudo kali-mcp status
+          sudo env KALI_MCP_CLI_PASSWORD_FILE=/run/kali-mcp-cli-test-password kali-mcp status
           curl -fsS http://127.0.0.1:8787/healthz
+      - name: Verify no admin plaintext in Core and default-deny Host Agent
+        run: |
+          docker inspect --format '{{json .Config.Env}}' kali-mcp-core | python3 -c '
+          import sys,json
+          values=json.load(sys.stdin)
+          assert not any("KALI_MCP_ADMIN_PASSWORD=" in value for value in values)
+          assert any("KALI_MCP_SUPERUSER_FILE=" in value for value in values)
+          '
+          sudo test -f /etc/kali-mcp/superuser.json
+          sudo test "$(sudo stat -c '%a' /etc/kali-mcp/superuser.json)" = 600
+          docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
+          import sys
+          sys.path.insert(0, "/opt/kali-mcp/current/src")
+          from kali_mcp.broker_client import call, BrokerError
+          path="/run/kali-mcp-agent/agent.sock"
+          try:
+              call(path, "settings_set", {"feature":"host_exec", "enabled":True}, timeout=5)
+          except BrokerError as error:
+              assert "Superuser authentication required" in str(error)
+          else:
+              raise AssertionError("Host Agent accepted an unauthenticated privilege change")
+          assert call(path,"settings_get")["settings"]["host_exec"] is False
+          PY
       - name: Verify private Host Agent IPC and sandbox Python
         run: |
           docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
@@ -79,7 +105,7 @@ jobs:
           test "$before" = "$after"
           sudo systemctl is-active --quiet kali-mcp-agent.service
           test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
-          sudo kali-mcp status
+          sudo env KALI_MCP_CLI_PASSWORD_FILE=/run/kali-mcp-cli-test-password kali-mcp status
           curl -fsS http://127.0.0.1:8787/healthz
       - name: Host logs on failure
         if: failure()

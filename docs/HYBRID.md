@@ -1,8 +1,9 @@
-# Kali MCP — hybrid systemd + Docker (development preview)
+# Kali MCP — systemd hybrid with named superuser (security beta)
 
-The existing privileged-Docker beta remains available separately. This feature
-branch adds a native Host Agent supervised by systemd and a nonprivileged
-MCP/WebUI container.
+The previous privileged-Docker beta is legacy and should not be exposed publicly.
+The recommended mode uses a native systemd Host Agent plus a nonprivileged
+MCP/WebUI container. New security features are verified on Linux AMD64; Kali
+ARM64 hardware and Cloudflare Access still require end-to-end validation.
 
 ## Initial installation
 
@@ -13,11 +14,11 @@ Run from a Kali ARM64/AMD64 checkout with root privileges:
 The Bash entrypoint validates hardware and dependencies, downloads a GitHub
 release archive, rejects unsafe source members and launches the SSH wizard.
 The wizard requires no curses or keyboard hotkeys. It asks for release channel,
-administrator password, access method and maximum host/root permissions.
+a **superuser username and strong password**, access method and maximum host/root permissions.
 Re-running the installer preserves configuration; --reconfigure reopens the
 wizard, and --non-interactive uses preset environment variables.
 
-Before the first hybrid prerelease, test with a pinned branch commit:
+For development builds, a full commit SHA can be used instead of a release:
 
     sudo KALI_MCP_VERSION=<full-40-character-commit> bash scripts/install-hybrid.sh
 
@@ -35,6 +36,62 @@ The new CLI command is installed automatically:
 The CLI dashboard is designed for SSH and displays systemd/Docker status,
 recent jobs, active capabilities and endpoint URLs. Root activation requires
 typing ENABLE ROOT and remains off by default.
+
+## Superuser and login protection
+
+On first install the SSH wizard creates one **application superuser** (distinct
+from the Linux root account) using a named username and password. It can
+generate a strong password or accept one entered with hidden terminal input.
+Credentials are stored as a salted scrypt password hash (N=131072, r=8, p=1),
+not in Docker environment variables or shell commands.
+
+- Canonical root-owned record: `/etc/kali-mcp/superuser.json` (0600).
+- Read-only copy for the Core: `/var/lib/kali-mcp/auth/superuser.json`
+  (root:10001, 0640, mounted read-only in Docker).
+- Login to `/login` requires **username + password**.
+- Every `sudo kali-mcp` CLI invocation requires **Linux sudo and the same
+  named superuser credentials**. The CLI does not accept passwords as flags.
+- Changes to Host Agent privileges additionally require re-entry of the
+  superuser password in WebUI. The Agent validates it against the root-owned
+  record, independently of WebUI session state.
+- Browser sessions use HttpOnly/Secure cookies, CSRF checks, a four-hour
+  lifetime and invalidation when the credential record changes.
+- `sudo kali-mcp wizard` permits credential changes after confirming the old
+  superuser password; then Core/Agent are restarted.
+- For automated local CLI tests only, a root-owned 0600 file may be
+  specified using `KALI_MCP_CLI_PASSWORD_FILE`. Do not expose such a file
+  to untrusted users or put passwords in shell history.
+
+Existing beta.3 upgrades **must use the new versioned Bash installer** rather
+than beta.3's in-place `kali-mcp upgrade` command to migrate from the old
+plaintext environment password. After migration, subsequent upgrades can use
+the dashboard again.
+
+## Exposure and bind-address policy
+
+The default Docker host binding is **127.0.0.1:8787**. The wizard permits
+`KALI_MCP_BIND_ADDRESS=0.0.0.0` only as an explicit choice, with an HTTPS
+canonical origin and a warning about protecting port 8787 by firewall and a
+TLS reverse proxy. **Authentication does not encrypt HTTP.** Never expose
+the raw HTTP origin directly to the untrusted Internet. Cloudflare Tunnel
+(origin localhost) or private Tailscale Serve are safer defaults.
+
+There is no guarantee of zero unauthorized access, especially with unrestricted
+host root enabled. Cloudflare Access with MFA, a restrictive firewall, regular
+security patching and testing of real client OAuth flows remain necessary.
+
+## Manage MCP client access
+
+The WebUI shows registered OAuth MCP clients and provides a CSRF-protected
+**Revoke access** action. The SSH CLI offers:
+
+    sudo kali-mcp clients
+    sudo kali-mcp client-revoke <32-character-client-id>
+
+Both routes require a superuser login; CLI additionally requires sudo.
+Revocation invalidates bearer tokens, refresh tokens and unused authorization
+codes for that client. Changing the superuser password invalidates all
+existing client OAuth tokens and browser sessions.
 
 ## Trust boundaries
 

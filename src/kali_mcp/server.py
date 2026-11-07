@@ -37,17 +37,20 @@ updates = UpdateChecker(cfg.repo, cfg.update_channel, cfg.check_interval)
 
 
 def actor() -> str:
-    return ACTOR.get()
+    value = ACTOR.get()
+    if not value.startswith("mcp:") or value == "mcp:unknown":
+        raise RuntimeError("Authenticated MCP client identity is unavailable")
+    return value
 
 
 def safe_call(fn, *args, **kwargs) -> dict:
     try:
         return fn(*args, **kwargs)
     except (ValueError, PolicyDenied, BrokerError, RuntimeError) as exc:
-        store.audit(actor(), getattr(fn, "__name__", "unknown"), "deny", str(exc)[:300])
+        store.audit(ACTOR.get(), getattr(fn, "__name__", "unknown"), "deny", str(exc)[:300])
         return {"ok": False, "error": str(exc)}
     except Exception as exc:
-        store.audit(actor(), getattr(fn, "__name__", "unknown"), "failed", type(exc).__name__)
+        store.audit(ACTOR.get(), getattr(fn, "__name__", "unknown"), "failed", type(exc).__name__)
         return {"ok": False, "error": "Internal operation error"}
 
 
