@@ -8,6 +8,7 @@ import pytest
 from kali_mcp.config import Config
 from kali_mcp.host_agent import AgentState, NativeAgent, BrokerDenied
 from kali_mcp.cli_config import parse_env, set_value
+from kali_mcp.superuser import make_record, save_record
 
 
 def test_upgrade_requires_host_owned_policy_and_exact_release(tmp_path, monkeypatch):
@@ -67,9 +68,15 @@ def test_disabling_root_revokes_only_root_sessions(tmp_path, monkeypatch):
     monkeypatch.setenv("KALI_MCP_ALLOW_HOST_ROOT", "true")
     cfg = Config.from_env()
     state = AgentState(tmp_path / "policy.json")
+    account = tmp_path / "superuser.json"
+    save_record(account, make_record("admin", "PASS_32_CHARS_FOR_TESTING_ONLY_2026"))
+    monkeypatch.setenv("KALI_MCP_SUPERUSER_FILE", str(account))
     agent = NativeAgent(cfg, state)
-    agent.dispatch("settings_set", {"feature": "host_exec", "enabled": True})
-    agent.dispatch("settings_set", {"feature": "host_root", "enabled": True})
+    proof = {"superuser_name": "admin", "superuser_password": "PASS_32_CHARS_FOR_TESTING_ONLY_2026"}
+    with pytest.raises(BrokerDenied):
+        agent.dispatch("settings_set", {"feature": "host_exec", "enabled": True})
+    agent.dispatch("settings_set", {"feature": "host_exec", "enabled": True, **proof})
+    agent.dispatch("settings_set", {"feature": "host_root", "enabled": True, **proof})
     agent.sessions["root-pty"] = {"root": True}
     agent.sessions["normal-pty"] = {"root": False}
     closed = []
@@ -79,10 +86,10 @@ def test_disabling_root_revokes_only_root_sessions(tmp_path, monkeypatch):
         del agent.sessions[key]
 
     monkeypatch.setattr(agent, "_close_session", close)
-    agent.dispatch("settings_set", {"feature": "host_root", "enabled": False})
+    agent.dispatch("settings_set", {"feature": "host_root", "enabled": False, **proof})
     assert closed == ["root-pty"]
     assert "normal-pty" in agent.sessions
-    agent.dispatch("settings_set", {"feature": "host_exec", "enabled": False})
+    agent.dispatch("settings_set", {"feature": "host_exec", "enabled": False, **proof})
     assert closed == ["root-pty", "normal-pty"]
     assert agent.store.get_setting("host_root") is False
 
