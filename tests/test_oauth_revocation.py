@@ -63,3 +63,61 @@ def test_mcp_token_revoke_and_webui_csrf(tmp_path, monkeypatch):
     finally:
         jobs.shutdown()
         store.close()
+
+
+
+def test_webui_failed_host_auth_rolls_back_host_and_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("KALI_MCP_HOST_AGENT", "true")
+    monkeypatch.setenv("KALI_MCP_ALLOW_HOST_EXEC", "true")
+    monkeypatch.setenv("KALI_MCP_ALLOW_HOST_ROOT", "true")
+    cfg = Config.from_env()
+    store = Store(tmp_path / "app.db")
+    store.set_setting("host_exec", True)
+    store.set_setting("host_root", True)
+    jobs = Jobs(cfg, store)
+    ui = UI(cfg, store, Policy(cfg, store), jobs,
+            UpdateChecker(cfg.repo, cfg.update_channel, cfg.check_interval))
+    from kali_mcp.broker_client import BrokerError
+    def fail_ipc(*args, **kwargs):
+        raise BrokerError("Host Agent refused authentication")
+    monkeypatch.setattr("kali_mcp.broker_client.call", fail_ipc)
+
+    class AdminMiddleware:
+        def __init__(self, app):
+            self.app = app
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                scope.setdefault("state", {}).update({
+                    "admin": True, "admin_username": "admin", "csrf": "test-csrf"})
+            return await self.app(scope, receive, send)
+
+    app = AdminMiddleware(Starlette(routes=[
+        Route("/api/v1/settings", ui.settings, methods=["POST"])
+    ]))
+    try:
+        client = TestClient(app, base_url=cfg.base_url)
+        response = client.post("/api/v1/settings", data={
+            "feature": "host_exec", "enabled": "false", "csrf": "test-csrf",
+            "superuser_password": "invalid"})
+        assert response.status_code == 403
+        assert store.get_setting("host_exec") is True
+        assert store.get_setting("host_root") is True
+    finally:
+        jobs.shutdown()
+        store.close()
+
+
+def test_update_permission_needs_webui_toggle(tmp_path, monkeypatch):
+    monkeypatch.setenv("KALI_MCP_ALLOW_MCP_UPDATES", "true")
+    cfg = Config.from_env()
+    store = Store(tmp_path / "app.db")
+    try:
+        from kali_mcp.policy import PolicyDenied
+        policy = Policy(cfg, store)
+        import pytest
+        with pytest.raises(PolicyDenied, match="disabled in WebUI"):
+            policy.require("mcp_updates", actor="mcp:test")
+        store.set_setting("mcp_updates", True)
+        policy.require("mcp_updates", actor="mcp:test")
+    finally:
+        store.close()
