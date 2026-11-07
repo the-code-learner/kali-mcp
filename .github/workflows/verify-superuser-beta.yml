@@ -1,0 +1,69 @@
+name: Verify published superuser beta.4 asset
+on:
+  workflow_run:
+    workflows: ["Publish hardened superuser beta.4"]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download immutable GitHub Release assets
+        run: |
+          set -euo pipefail
+          base=https://github.com/the-code-learner/kali-mcp/releases/download/v0.1.0-beta.4
+          curl -fsSL "$base/install-hybrid.sh" -o install-hybrid.sh
+          curl -fsSL "$base/kali-mcp-hybrid.yml" -o kali-mcp-hybrid.yml
+          curl -fsSL "$base/SHA256SUMS" -o SHA256SUMS
+          sha256sum -c SHA256SUMS
+          bash -n install-hybrid.sh
+      - name: Install exact asset using latest beta channel
+        run: |
+          sudo env KALI_MCP_ADMIN_PASSWORD=CI_VERIFIED_RELEASE_SUPERUSER_PASSWORD_2026 \
+            KALI_MCP_ACCESS_MODE=local KALI_MCP_RELEASE_CHANNEL=beta \
+            bash install-hybrid.sh --non-interactive
+      - name: Validate sealed superuser, safe local binding, MCP and CLI
+        env:
+          KALI_MCP_TEST_ADMIN_PASSWORD: CI_VERIFIED_RELEASE_SUPERUSER_PASSWORD_2026
+        run: |
+          set -euo pipefail
+          test "$(sudo cat /opt/kali-mcp/current/.source-ready)" = "v0.1.0-beta.4"
+          sudo test -f /etc/kali-mcp/superuser.json
+          ! sudo grep -q '^KALI_MCP_ADMIN_PASSWORD=' /etc/kali-mcp/stack.env
+          test "$(docker inspect --format '{{.HostConfig.Privileged}}' kali-mcp-core)" = false
+          sudo systemctl is-active --quiet kali-mcp-agent.service
+          sudo sh -c 'umask 077; printf "%s\n" CI_VERIFIED_RELEASE_SUPERUSER_PASSWORD_2026 > /run/cli-verify-password'
+          sudo env KALI_MCP_CLI_PASSWORD_FILE=/run/cli-verify-password kali-mcp status
+          python3 scripts/smoke_http.py
+          docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
+          import sys
+          sys.path.insert(0, "/opt/kali-mcp/current/src")
+          from kali_mcp.broker_client import call,BrokerError
+          s="/run/kali-mcp-agent/agent.sock"
+          assert call(s,"ping")["broker"] == "systemd-host-agent"
+          try:
+              call(s,"settings_set",{"feature":"host_exec","enabled":True})
+          except BrokerError:
+              pass
+          else:
+              raise AssertionError("Unauthenticated host settings request accepted")
+          assert call(s,"settings_get")["settings"]["host_root"] is False
+          PY
+      - name: Failure details
+        if: failure()
+        run: |
+          sudo systemctl status kali-mcp-agent.service --no-pager || true
+          sudo journalctl -u kali-mcp-agent.service -n 80 --no-pager || true
+          docker logs --tail 120 kali-mcp-core || true
+      - name: Cleanup
+        if: always()
+        run: |
+          sudo systemctl stop kali-mcp-agent.service || true
+          if test -f /etc/kali-mcp/stack.env; then
+            sudo docker compose --env-file /etc/kali-mcp/stack.env \
+              -f /opt/kali-mcp/current/kali-mcp-hybrid.yml down -v || true
+          fi
