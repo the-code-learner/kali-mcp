@@ -21,86 +21,145 @@ from .policy import Policy, PolicyDenied
 from .releases import UpdateChecker
 from .store import Store, digest
 from .jobs import Jobs
+from .superuser import read_record, record_fingerprint, verify
 from .reports import report_html
 
 
-def _csrf_for(cookie: str, password: str) -> str:
-    return hmac.new(password.encode(), cookie.encode(), hashlib.sha256).hexdigest()
+def _csrf_for(cookie: str, credential_fingerprint: str) -> str:
+    return hmac.new(credential_fingerprint.encode(), cookie.encode(), hashlib.sha256).hexdigest()
 
 
 class Admin:
+    """Web administrator sessions bound to the current superuser credential."""
+
     def __init__(self, cfg: Config, store: Store):
         self.cfg, self.store = cfg, store
+        candidate = os.getenv("KALI_MCP_SUPERUSER_FILE", "").strip()
+        self.credential_path = Path(candidate) if candidate else None
         self.failures: dict[str, tuple[int, float]] = {}
+        self.global_failures: tuple[int, float] = (0, 0.0)
+        self.hash_gate = asyncio.Semaphore(2)
+
+    def _credential(self) -> tuple[str, str, dict | None]:
+        if self.credential_path is not None:
+            record = read_record(self.credential_path)
+            return record["username"], record_fingerprint(record), record
+        if not self.cfg.admin_password or len(self.cfg.admin_password) < 16:
+            raise RuntimeError("Superuser not configured")
+        # Compatibility for older Docker-only deployment. Hybrid never falls
+        # back to a plaintext environment password.
+        return "admin", hashlib.sha256(self.cfg.admin_password.encode()).hexdigest(), None
 
     def authenticate_request(self, request: Request) -> tuple[bool, str]:
         request.state.admin = False
+        request.state.admin_username = ""
         request.state.csrf = ""
         cookie = request.cookies.get("kali_admin", "")
-        if not cookie:
+        if not cookie or len(cookie) > 256:
+            return False, ""
+        try:
+            username, fingerprint, _ = self._credential()
+        except (RuntimeError, ValueError, OSError):
             return False, ""
         with self.store.lock:
             row = self.store.db.execute(
-                "SELECT * FROM admin_sessions WHERE hash=? AND expires>?", (digest(cookie), int(time.time()))).fetchone()
+                "SELECT * FROM admin_sessions WHERE hash=? AND expires>?",
+                (digest(cookie), int(time.time()))).fetchone()
         if not row:
             return False, ""
-        csrf = _csrf_for(cookie, self.cfg.admin_password)
+        csrf = _csrf_for(cookie, fingerprint)
         if not secrets.compare_digest(row["csrf_hash"], digest(csrf)):
             return False, ""
         request.state.admin = True
+        request.state.admin_username = username
         request.state.csrf = csrf
         return True, csrf
 
     async def login_get(self, request: Request) -> HTMLResponse:
-        nxt = request.query_params.get("next", "/")
-        if not nxt.startswith("/") or nxt.startswith("//"):
+        nxt = str(request.query_params.get("next", "/"))
+        if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
             nxt = "/"
-        return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>Kali MCP Login</title>
-          <meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/static/app.css"></head>
+        return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
+          <title>Kali MCP · Superuser login</title>
+          <meta name="viewport" content="width=device-width">
+          <link rel="stylesheet" href="/static/app.css"></head>
           <body><main class="login"><h1>Kali MCP</h1>
-          <p>Administrator login</p>
+          <p>Superuser authentication</p>
           <form method="post" action="/login">
             <input type="hidden" name="next" value="{html.escape(nxt,quote=True)}">
-            <label>Administrator password<input type="password" name="password" required autocomplete="current-password"></label>
+            <label>Username<input name="username" autocomplete="username" required maxlength="32"></label>
+            <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
             <button type="submit">Sign in</button></form></main></body></html>""",
-            headers={"Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'"})
+            headers={"Cache-Control": "no-store",
+                     "Content-Security-Policy": "default-src 'none'; style-src 'self'; form-action 'self'; base-uri 'none'"})
+
+    def _rate_limited(self, source: str) -> bool:
+        count, until = self.failures.get(source, (0, 0.0))
+        global_count, global_until = self.global_failures
+        return until > time.monotonic() or global_until > time.monotonic()
 
     async def login_post(self, request: Request):
-        if not self.cfg.admin_password or len(self.cfg.admin_password) < 16:
-            return JSONResponse({"error": "Configure KALI_MCP_ADMIN_PASSWORD (16+ characters) in the private YAML stack"}, status_code=503)
+        try:
+            expected_user, fingerprint, record = self._credential()
+        except (RuntimeError, ValueError, OSError):
+            return JSONResponse({"error": "Superuser setup incomplete"}, status_code=503)
         source = request.client.host if request.client else "unknown"
-        count, until = self.failures.get(source, (0, 0.0))
-        if until > time.monotonic():
-            return JSONResponse({"error": "Too many attempts"}, status_code=429)
+        if self._rate_limited(source):
+            return JSONResponse({"error": "Too many login attempts"}, status_code=429)
+        if int(request.headers.get("content-length", "0")) > 4096:
+            return JSONResponse({"error": "Request too large"}, status_code=413)
         form = await request.form()
+        username = str(form.get("username") or "admin")[:64]
         password = str(form.get("password") or "")
-        if not secrets.compare_digest(password, self.cfg.admin_password):
+        if len(password) > 256:
+            return HTMLResponse("Invalid credentials", status_code=401)
+        if record is not None:
+            async with self.hash_gate:
+                valid = await asyncio.to_thread(verify, record, username, password)
+        else:
+            valid = (secrets.compare_digest(username, "admin")
+                     and secrets.compare_digest(password, self.cfg.admin_password))
+        if not valid:
+            count, _ = self.failures.get(source, (0, 0.0))
             count += 1
-            self.failures[source] = (count, time.monotonic() + min(300, 2 ** min(count, 8)))
-            self.store.audit(source, "admin.login", "deny", "password mismatch")
+            self.failures[source] = (count, time.monotonic() + min(600, 2 ** min(count, 9)))
+            global_count, _ = self.global_failures
+            global_count += 1
+            self.global_failures = (global_count, time.monotonic() + 300 if global_count >= 40 else 0)
+            if len(self.failures) > 4096:
+                self.failures.clear()
+            self.store.audit("webui", "admin.login", "deny", "authentication rejected")
             return HTMLResponse("Invalid credentials", status_code=401)
         self.failures.pop(source, None)
+        self.global_failures = (0, 0)
         cookie = secrets.token_urlsafe(48)
-        csrf = _csrf_for(cookie, self.cfg.admin_password)
+        csrf = _csrf_for(cookie, fingerprint)
         with self.store.transaction():
-            self.store.db.execute("INSERT INTO admin_sessions VALUES(?,?,?)", (digest(cookie), digest(csrf), int(time.time()) + 8 * 3600))
-            self.store._audit(source, "admin.login", "allow")
+            self.store.db.execute("INSERT INTO admin_sessions VALUES(?,?,?)",
+                                  (digest(cookie), digest(csrf), int(time.time()) + 4 * 3600))
+            self.store._audit("webui:" + expected_user, "admin.login", "allow")
         nxt = str(form.get("next") or "/")
         if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
             nxt = "/"
         response = RedirectResponse(nxt, status_code=303)
-        response.set_cookie("kali_admin", cookie, httponly=True, secure=self.cfg.base_url.startswith("https:"),
-                            samesite="lax", max_age=8 * 3600, path="/")
+        response.set_cookie("kali_admin", cookie, httponly=True,
+                            secure=self.cfg.base_url.startswith("https:"),
+                            samesite="lax", max_age=4 * 3600, path="/")
         response.headers["Cache-Control"] = "no-store"
         return response
 
     async def logout(self, request: Request):
+        if not request.state.admin or not request.state.csrf:
+            return JSONResponse({"error": "Login required"}, status_code=401)
+        form = await request.form()
+        if not secrets.compare_digest(str(form.get("csrf") or ""), request.state.csrf):
+            return JSONResponse({"error": "Invalid CSRF"}, status_code=403)
         cookie = request.cookies.get("kali_admin", "")
         if cookie:
             with self.store.lock:
                 self.store.db.execute("DELETE FROM admin_sessions WHERE hash=?", (digest(cookie),))
         response = RedirectResponse("/login", status_code=303)
-        response.delete_cookie("kali_admin")
+        response.delete_cookie("kali_admin", path="/")
         return response
 
 
@@ -147,7 +206,10 @@ class UI:
                        for j in self.store.list_jobs(30))
         body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
         <title>Kali MCP — Dashboard</title><link rel="stylesheet" href="/static/app.css"></head><body>
-        <header><h1>Kali MCP <small>Control Plane</small></h1><a href="/logout">Logout</a></header>
+        <header><h1>Kali MCP <small>Control Plane</small></h1>
+        <form method="post" action="/logout">
+        <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
+        <button type="submit">Logout</button></form></header>
         <main><section class="summary"><h2>Status</h2><div id="status">Loading ...</div></section>
         <section><h2>Live activity</h2><p class="muted">MCP calls, broker jobs and results tracked by the job engine.</p>
         <table><thead><tr><th>Tool</th><th>Client</th><th>State</th><th>Result</th></tr></thead><tbody id="jobs">{rows}</tbody></table></section>
