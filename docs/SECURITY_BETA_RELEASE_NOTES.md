@@ -36,6 +36,11 @@ status and jobs. Use `sudo kali-mcp` for the SSH text dashboard.
 - Limits on HTTP payloads, login/registration/token rates, job queue and
   persistent terminal sessions; enhanced response security headers.
 - Sensitive command arguments and script bodies redacted in stored job metadata.
+- WebUI and SSH CLI can inventory registered MCP clients and revoke their
+  access/refresh tokens immediately; credential rotation revokes all existing
+  MCP tokens and authorization codes as well as browser sessions.
+- OAuth client-specific jobs require an attributed client identity and fail
+  closed if attribution is unavailable.
 - Loopback-only host binding by default; optional 0.0.0.0 bind requires
   explicit wizard choice and HTTPS-origin + firewall acknowledgment.
 
