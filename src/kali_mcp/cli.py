@@ -69,17 +69,12 @@ def print_status() -> None:
             print("docker compose unavailable")
     settings_file = ETC / "stack.env"
     if settings_file.exists():
-        from scripts.wizard import parse_env
+        from .cli_config import parse_env
         values = parse_env(settings_file)
         url = values.get("KALI_MCP_PUBLIC_URL", "http://localhost:8787")
         print("WebUI / OAuth URL : ", url)
         print("MCP endpoint      : ", url + "/mcp")
         print("Channel           : ", values.get("KALI_MCP_RELEASE_CHANNEL", "beta"))
-
-
-def list_jobs(n: int = 15) -> None:
-    with data_store() as_unused:
-        pass
 
 
 def show_jobs(limit: int = 15) -> None:
@@ -148,7 +143,7 @@ def set_capability(name: str, enabled: bool) -> None:
 
 
 def update_status(force: bool = False) -> None:
-    from scripts.wizard import parse_env
+    from .cli_config import parse_env
     env = parse_env(ETC / "stack.env")
     checker = UpdateChecker("the-code-learner/kali-mcp",
         env.get("KALI_MCP_RELEASE_CHANNEL", "beta"), 21600)
