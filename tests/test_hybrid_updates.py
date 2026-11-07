@@ -59,3 +59,39 @@ def test_native_upgrade_denied_by_deployment_ceiling(tmp_path, monkeypatch):
     policy = AgentState(tmp_path / "agent-policy.json")
     with pytest.raises(BrokerDenied, match="KALI_MCP_ALLOW_MCP_UPDATES"):
         policy.set_setting("mcp_updates", True, cfg)
+
+
+
+def test_disabling_root_revokes_only_root_sessions(tmp_path, monkeypatch):
+    monkeypatch.setenv("KALI_MCP_ALLOW_HOST_EXEC", "true")
+    monkeypatch.setenv("KALI_MCP_ALLOW_HOST_ROOT", "true")
+    cfg = Config.from_env()
+    state = AgentState(tmp_path / "policy.json")
+    agent = NativeAgent(cfg, state)
+    agent.dispatch("settings_set", {"feature": "host_exec", "enabled": True})
+    agent.dispatch("settings_set", {"feature": "host_root", "enabled": True})
+    agent.sessions["root-pty"] = {"root": True}
+    agent.sessions["normal-pty"] = {"root": False}
+    closed = []
+
+    def close(key, session):
+        closed.append(key)
+        del agent.sessions[key]
+
+    monkeypatch.setattr(agent, "_close_session", close)
+    agent.dispatch("settings_set", {"feature": "host_root", "enabled": False})
+    assert closed == ["root-pty"]
+    assert "normal-pty" in agent.sessions
+    agent.dispatch("settings_set", {"feature": "host_exec", "enabled": False})
+    assert closed == ["root-pty", "normal-pty"]
+    assert agent.store.get_setting("host_root") is False
+
+
+def test_webui_disabling_host_exec_resets_root(configured):
+    cfg, store = configured
+    from kali_mcp.policy import Policy
+    p = Policy(cfg, store)
+    p.set_webui("host_exec", True)
+    p.set_webui("host_root", True)
+    p.set_webui("host_exec", False)
+    assert store.get_setting("host_root") is False
