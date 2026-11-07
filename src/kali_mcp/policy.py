@@ -24,7 +24,7 @@ class Policy:
         if not ceilings[feature]["allowed"]:
             self.store.audit(actor, feature, "deny", "YAML ceiling: " + ceilings[feature]["yaml"])
             raise PolicyDenied(f"Disabled by deployment setting {ceilings[feature]['yaml']}")
-        if feature.startswith("mcp_"):
+        if feature in {"mcp_host_exec", "mcp_root"}:
             return
         if not self.store.get_setting(feature):
             self.store.audit(actor, feature, "deny", "WebUI toggle off")
