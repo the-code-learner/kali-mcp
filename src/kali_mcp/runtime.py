@@ -120,6 +120,7 @@ app = SecurityGate(Starlette(
         Route("/api/v1/status", ui.status, methods=["GET"]),
         Route("/api/v1/settings", ui.settings, methods=["POST"]),
         Route("/api/v1/updates/check", ui.update_check, methods=["POST"]),
+        Route("/api/v1/updates/install", ui.update_install, methods=["POST"]),
         Route("/jobs/{job_id}", ui.job_report, methods=["GET"]),
         Route("/api/v1/jobs/{job_id}", ui.job_detail, methods=["GET"]),
         Route("/api/v1/events", ui.events, methods=["GET"]),
