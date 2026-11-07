@@ -1,0 +1,81 @@
+name: Hybrid systemd + Docker installer smoke
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  host-agent:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate syntax and mocked host permissions
+        run: |
+          bash -n scripts/install-hybrid.sh
+          python3 -m compileall -q src scripts
+          python3 - <<'PY'
+          import yaml
+          c = yaml.safe_load(open("kali-mcp-hybrid.yml"))["services"]["kali-mcp-core"]
+          assert "privileged" not in c
+          assert c["cap_drop"] == ["ALL"]
+          assert "docker.sock" not in str(c)
+          PY
+      - name: Run SSH installer non-interactively on isolated Linux host
+        env:
+          SRC_REF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          sudo env KALI_MCP_VERSION="$SRC_REF" \
+            KALI_MCP_ADMIN_PASSWORD=CI_HYBRID_PASSWORD_TEST_ONLY_2026 \
+            KALI_MCP_ACCESS_MODE=local \
+            KALI_MCP_RELEASE_CHANNEL=beta \
+            bash scripts/install-hybrid.sh --non-interactive
+      - name: Validate systemd service and nonprivileged Compose
+        run: |
+          set -euo pipefail
+          sudo systemctl is-active --quiet kali-mcp-agent.service
+          test -S /run/kali-mcp-agent/agent.sock
+          stat -c '%a %U %G' /run/kali-mcp-agent/agent.sock
+          test "$(docker inspect --format '{{.HostConfig.Privileged}}' kali-mcp-core)" = false
+          test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
+          sudo kali-mcp status
+          curl -fsS http://127.0.0.1:8787/healthz
+      - name: Verify private Host Agent IPC and sandbox Python
+        run: |
+          docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
+          import sys
+          sys.path.insert(0, "/opt/kali-mcp/current/src")
+          from kali_mcp.broker_client import call
+          socket="/run/kali-mcp-agent/agent.sock"
+          assert call(socket,"ping")["broker"] == "systemd-host-agent"
+          settings=call(socket,"settings_get")["settings"]
+          assert settings["host_root"] is False
+          result=call(socket,"execute",{"mode":"sandbox","script":"print('hybrid-ok')","language":"python","timeout":30},timeout=60)
+          assert result.get("exit_code")==0, result
+          assert "hybrid-ok" in result.get("stdout",""),result
+          print("Hybrid systemd socket + sandbox verified")
+          PY
+      - name: Verify OAuth consent and protected MCP tools/list
+        env:
+          KALI_MCP_TEST_ADMIN_PASSWORD: CI_HYBRID_PASSWORD_TEST_ONLY_2026
+        run: python3 scripts/smoke_http.py
+      - name: Host logs on failure
+        if: failure()
+        run: |
+          sudo systemctl status kali-mcp-agent.service --no-pager || true
+          sudo journalctl -u kali-mcp-agent.service -n 100 --no-pager || true
+          docker ps -a || true
+          docker logs --tail 120 kali-mcp-core || true
+      - name: Stop test appliance and cleanup
+        if: always()
+        run: |
+          sudo systemctl stop kali-mcp-agent.service || true
+          if test -f /etc/kali-mcp/stack.env; then
+            sudo docker compose --env-file /etc/kali-mcp/stack.env -f /opt/kali-mcp/current/kali-mcp-hybrid.yml down -v || true
+          fi
