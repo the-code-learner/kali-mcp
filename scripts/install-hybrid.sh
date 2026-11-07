@@ -162,6 +162,10 @@ PY
 )"
 TARGET="$ROOT/releases/$SELECTED"
 echo "Staged version: $SELECTED"
+OLD_SUPERUSER_FINGERPRINT="absent"
+if test -f "$CONFIG/superuser.json"; then
+  OLD_SUPERUSER_FINGERPRINT="$(sha256sum "$CONFIG/superuser.json" | cut -d' ' -f1)"
+fi
 if test ! -f "$CONFIG/stack.env" || test ! -f "$CONFIG/superuser.json" || test "$RECONFIGURE" = true; then
   if test "$NONINTERACTIVE" = true; then
     python3 "$TARGET/scripts/wizard.py" --config-dir "$CONFIG" --agent-gid "$GID" --non-interactive
@@ -184,6 +188,25 @@ if ! grep -q '^KALI_MCP_SUPERUSER_FILE=' "$CONFIG/agent.env"; then
   printf '%s\n' 'KALI_MCP_SUPERUSER_FILE=/etc/kali-mcp/superuser.json' >> "$CONFIG/agent.env"
 fi
 chmod 0600 "$CONFIG/agent.env"
+NEW_SUPERUSER_FINGERPRINT="$(sha256sum "$CONFIG/superuser.json" | cut -d' ' -f1)"
+if test "$NEW_SUPERUSER_FINGERPRINT" != "$OLD_SUPERUSER_FINGERPRINT" && test -f "$STATE/core/app.db"; then
+  echo 'Superuser changed or migrated: revoking outstanding WebUI sessions and MCP OAuth tokens'
+  KALI_MCP_CORE_DB="$STATE/core/app.db" python3 - <<'PY'
+import os, sqlite3
+db = sqlite3.connect(os.environ["KALI_MCP_CORE_DB"], timeout=20)
+try:
+    db.execute("PRAGMA busy_timeout=20000")
+    with db:
+        db.execute("UPDATE oauth_tokens SET revoked=1")
+        db.execute("DELETE FROM oauth_codes")
+        db.execute("DELETE FROM admin_sessions")
+finally:
+    db.close()
+PY
+  for file in "$STATE/core/app.db" "$STATE/core/app.db-wal" "$STATE/core/app.db-shm"; do
+    if test -e "$file"; then chown 10001:10001 "$file"; fi
+  done
+fi
 
 echo 'Installing native Agent Python dependencies'
 if test ! -x "$ROOT/agent-venv/bin/python"; then python3 -m venv "$ROOT/agent-venv"; fi
