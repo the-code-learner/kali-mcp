@@ -1,0 +1,56 @@
+# Kali MCP HYBRID: Docker MCP/WebUI (UNPRIVILEGED) + native systemd Host Agent
+# Installed by the SSH-friendly scripts/install-hybrid.sh wizard.
+# The installer creates /etc/kali-mcp/stack.env; do NOT publish its contents.
+services:
+  kali-mcp-core:
+    image: python:3.12-slim-bookworm
+    container_name: kali-mcp-core
+    restart: unless-stopped
+    user: "10001:10001"
+    group_add:
+      - "\${KALI_MCP_AGENT_GID:?Run the systemd hybrid installer first}"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+    working_dir: /opt/kali-mcp/current
+    ports:
+      - "127.0.0.1:\${KALI_MCP_PORT:-8787}:8000"
+    volumes:
+      - /opt/kali-mcp/current:/opt/kali-mcp/current:ro
+      - /var/lib/kali-mcp/venv:/opt/venv
+      - /var/lib/kali-mcp/core:/data
+      - /run/kali-mcp-agent:/run/kali-mcp-agent:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+      TZ: "\${TZ:-Europe/Rome}"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+      KALI_MCP_PUBLIC_URL: "\${KALI_MCP_PUBLIC_URL:-http://localhost:8787}"
+      KALI_MCP_ADMIN_PASSWORD: "\${KALI_MCP_ADMIN_PASSWORD:?Set KALI_MCP_ADMIN_PASSWORD in /etc/kali-mcp/stack.env}"
+      KALI_MCP_REPO: "the-code-learner/kali-mcp"
+      KALI_MCP_RELEASE_CHANNEL: "\${KALI_MCP_RELEASE_CHANNEL:-beta}"
+      KALI_MCP_UPDATE_CHECK_SECONDS: "\${KALI_MCP_UPDATE_CHECK_SECONDS:-21600}"
+      KALI_MCP_ALLOWED_CIDRS: "\${KALI_MCP_ALLOWED_CIDRS:-127.0.0.1/32}"
+      KALI_MCP_BROKER_SOCKET: "/run/kali-mcp-agent/agent.sock"
+      KALI_MCP_ALLOW_HOST_EXEC: "\${KALI_MCP_ALLOW_HOST_EXEC:-false}"
+      KALI_MCP_ALLOW_HOST_ROOT: "\${KALI_MCP_ALLOW_HOST_ROOT:-false}"
+      KALI_MCP_ALLOW_PACKAGE_INSTALL: "\${KALI_MCP_ALLOW_PACKAGE_INSTALL:-false}"
+      KALI_MCP_ALLOW_NETWORK_CHANGES: "\${KALI_MCP_ALLOW_NETWORK_CHANGES:-false}"
+      KALI_MCP_ALLOW_MCP_HOST_EXEC: "\${KALI_MCP_ALLOW_MCP_HOST_EXEC:-false}"
+      KALI_MCP_ALLOW_MCP_ROOT: "\${KALI_MCP_ALLOW_MCP_ROOT:-false}"
+      KALI_MCP_ALLOW_MCP_UPDATES: "\${KALI_MCP_ALLOW_MCP_UPDATES:-false}"
+      KALI_MCP_MAX_JOB_SECONDS: "\${KALI_MCP_MAX_JOB_SECONDS:-300}"
+    command: ["/bin/sh", "/opt/kali-mcp/current/scripts/start.sh"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import socket; s=socket.create_connection(('127.0.0.1',8000),2); s.close()"
+      start_period: 180s
+      interval: 20s
+      timeout: 5s
+      retries: 5
