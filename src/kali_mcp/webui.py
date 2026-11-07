@@ -151,7 +151,7 @@ class UI:
         <main><section class="summary"><h2>Status</h2><div id="status">Loading ...</div></section>
         <section><h2>Live activity</h2><p class="muted">MCP calls, broker jobs and results tracked by the job engine.</p>
         <table><thead><tr><th>Tool</th><th>Client</th><th>State</th><th>Result</th></tr></thead><tbody id="jobs">{rows}</tbody></table></section>
-        <section><h2>Execution capabilities</h2><p class="warning">The native Host Agent has privileged host authority. These switches are authorization controls, not a hardened isolation guarantee.</p>
+        <section><h2>Execution capabilities</h2><p class="warning">Host execution is privileged by design. These switches authorize client operations, not protection from control-plane compromise.</p>
         {''.join(toggles)}</section>
         <section><h2>Updates</h2><p id="updates">Checking ...</p>
         <form method="post" action="/api/v1/updates/check">
