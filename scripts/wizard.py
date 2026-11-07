@@ -142,6 +142,10 @@ def configure(path: Path, gid: int, *, interactive: bool) -> dict[str, str]:
         if not yesno("Root access can fully control or destroy this Kali system. Continue", False):
             root = False
 
+    install_updates = (yesno("Allow administrator WebUI/MCP update installation",
+                       old.get("KALI_MCP_ALLOW_MCP_UPDATES", "false") == "true")
+                       if interactive else os.getenv("KALI_MCP_ALLOW_MCP_UPDATES",
+                       old.get("KALI_MCP_ALLOW_MCP_UPDATES", "false")) == "true")
     pw = password(old.get("KALI_MCP_ADMIN_PASSWORD"), interactive=interactive)
     shared = {
         "KALI_MCP_PUBLIC_URL": origin,
@@ -153,7 +157,7 @@ def configure(path: Path, gid: int, *, interactive: bool) -> dict[str, str]:
         "KALI_MCP_ALLOW_MCP_ROOT": str(root).lower(),
         "KALI_MCP_ALLOW_PACKAGE_INSTALL": old.get("KALI_MCP_ALLOW_PACKAGE_INSTALL", "false"),
         "KALI_MCP_ALLOW_NETWORK_CHANGES": old.get("KALI_MCP_ALLOW_NETWORK_CHANGES", "false"),
-        "KALI_MCP_ALLOW_MCP_UPDATES": old.get("KALI_MCP_ALLOW_MCP_UPDATES", "false"),
+        "KALI_MCP_ALLOW_MCP_UPDATES": str(install_updates).lower(),
         "KALI_MCP_UPDATE_CHECK_SECONDS": "21600",
         "KALI_MCP_MAX_JOB_SECONDS": "300",
         "KALI_MCP_PORT": "8787",
