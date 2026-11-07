@@ -137,6 +137,31 @@ def show_job(job_id: str) -> None:
         store.close()
 
 
+def show_clients(limit: int = 30) -> None:
+    store = data_store()
+    try:
+        print("REGISTERED MCP CLIENTS")
+        for item in store.list_clients(limit):
+            print(item["client_id"], item["name"][:50],
+                  "active" if item["active"] else "revoked/expired")
+    finally:
+        store.close()
+
+
+def revoke_client(client_id: str) -> None:
+    if input("Type REVOKE to invalidate this client's OAuth tokens: ").strip() != "REVOKE":
+        print("Cancelled.")
+        return
+    store = data_store()
+    try:
+        if not store.revoke_client(client_id, actor="cli:" + AUTH_USER):
+            print("No such client")
+        else:
+            print("MCP OAuth client tokens revoked:", client_id)
+    finally:
+        store.close()
+
+
 def show_audit(limit: int = 15) -> None:
     store = data_store()
     try:
@@ -379,6 +404,8 @@ def dashboard() -> None:
             show_jobs(25)
         elif option == "a":
             show_audit(25)
+        elif option == "c":
+            show_clients(25)
         elif option == "u":
             update_status(True)
         elif option == "p":
@@ -409,6 +436,9 @@ def main() -> None:
     item = sub.add_parser("job")
     item.add_argument("job_id")
     sub.add_parser("audit")
+    sub.add_parser("clients")
+    revoke = sub.add_parser("client-revoke")
+    revoke.add_argument("client_id")
     sub.add_parser("access")
     sub.add_parser("updates")
     sub.add_parser("upgrade")
@@ -431,6 +461,10 @@ def main() -> None:
             show_job(args.job_id)
         elif args.command == "audit":
             show_audit(40)
+        elif args.command == "clients":
+            show_clients(40)
+        elif args.command == "client-revoke":
+            revoke_client(args.client_id)
         elif args.command == "access":
             access_menu()
         elif args.command == "updates":
