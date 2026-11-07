@@ -18,6 +18,8 @@ import shutil
 import socketserver
 import subprocess
 import tempfile
+import time
+from collections import deque
 from uuid import uuid4
 
 from .releases import query_releases, select_release
@@ -95,6 +97,30 @@ class AgentState:
 
 
 class NativeAgent(Broker):
+    def __init__(self, cfg: Config, store: AgentState):
+        super().__init__(cfg, store)
+        self._auth_gate = threading.BoundedSemaphore(1)
+        self._auth_failures = deque()
+        self._auth_lock = threading.Lock()
+
+    def _verify_superuser(self, username: str, password: str) -> None:
+        now = time.monotonic()
+        with self._auth_lock:
+            while self._auth_failures and self._auth_failures[0] < now - 60:
+                self._auth_failures.popleft()
+            if len(self._auth_failures) >= 8:
+                raise BrokerDenied("Superuser approval temporarily rate-limited")
+        if not self._auth_gate.acquire(blocking=False):
+            raise BrokerDenied("Superuser verification busy")
+        try:
+            auth_path = Path(os.getenv("KALI_MCP_SUPERUSER_FILE", str(DEFAULT_HOST_FILE)))
+            if not verify(read_record(auth_path), username, password):
+                with self._auth_lock:
+                    self._auth_failures.append(time.monotonic())
+                raise BrokerDenied("Superuser authentication required")
+        finally:
+            self._auth_gate.release()
+
     def _nsenter(self, argv: list[str], *, root: bool) -> list[str]:
         # Native systemd agent is already on Kali; never enter PID/mount namespaces.
         if root:
@@ -116,10 +142,7 @@ class NativeAgent(Broker):
             # Authenticate the superuser independently on the root-owned host.
             username = data.get("superuser_name")
             password = data.get("superuser_password")
-            auth_path = Path(os.getenv("KALI_MCP_SUPERUSER_FILE", str(DEFAULT_HOST_FILE)))
-            if not verify(read_record(auth_path), username, password):
-                self.store.audit("host-agent", "settings.auth", "deny", key)
-                raise BrokerDenied("Superuser authentication required")
+            self._verify_superuser(username, password)
             self.store.set_setting(key, enabled, self.cfg)
             if not enabled and key in {"host_exec", "host_root"}:
                 # Revocation is immediate for terminals still owned by the Agent.
