@@ -30,7 +30,12 @@ ui = UI(cfg, store, core.policy, core.jobs, core.updates)
 
 
 class SecurityGate:
-    """Pure ASGI auth middleware: do not interfere with MCP streaming responses."""
+    """Single HTTP ingress: host/origin checks, bounded bodies and auth.
+
+    Proxy-specific IP headers are deliberately NOT trusted for rate limiting.
+    TLS and edge rules must be enforced by the HTTPS reverse proxy.
+    """
+
     def __init__(self, app):
         self.app = app
         self.host = urlparse(cfg.base_url).hostname
@@ -38,14 +43,36 @@ class SecurityGate:
         self._recent: dict[str, deque[float]] = {}
         self._shared = deque()
 
-
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
+
+        async def safe_send(message):
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                headers.extend([
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"x-frame-options", b"DENY"),
+                    (b"referrer-policy", b"no-referrer"),
+                    (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
+                ])
+                if cfg.base_url.startswith("https://"):
+                    headers.append((b"strict-transport-security", b"max-age=31536000"))
+                if scope.get("path", "").startswith(("/api/", "/jobs/", "/login", "/logout", "/authorize", "/token", "/register")):
+                    headers.append((b"cache-control", b"no-store"))
+            return await send(message)
+
         path = scope.get("path", "")
         headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers", [])}
         method = scope.get("method", "GET").upper()
-        # Limit unauthenticated protocol endpoints, including on a LAN/public bind.
+        raw_host = headers.get("host", "")
+        try:
+            host = urlparse("http://" + raw_host).hostname
+        except ValueError:
+            host = None
+        if host not in {self.host, "localhost", "127.0.0.1", "::1", "kali-mcp-core"}:
+            return await JSONResponse({"error": "Unrecognized Host"}, status_code=400)(scope, receive, safe_send)
+
         if method == "POST" and path in {"/register", "/token", "/authorize", "/login"}:
             source = str(scope.get("client", ("unknown", 0))[0])
             now = time.monotonic()
@@ -62,31 +89,60 @@ class SecurityGate:
                 if len(self._recent) > 2048:
                     self._recent.clear()
             if excessive:
-                return await JSONResponse({"error": "rate_limited"}, status_code=429)(scope, receive, send)
-        if method == "POST":
-            try:
-                size = int(headers.get("content-length", "0"))
-            except ValueError:
-                size = 10000000
-            max_size = 262144 if path.startswith("/mcp") else 16384
-            if size > max_size:
-                return await JSONResponse({"error": "request_too_large"}, status_code=413)(scope, receive, send)
-        # Reject browser cross-origin state-changing requests even when cookies exist.
+                return await JSONResponse({"error": "rate_limited"}, status_code=429)(scope, receive, safe_send)
+
         if method == "POST" and path in {"/login", "/authorize", "/logout",
                                         "/api/v1/settings", "/api/v1/updates/check",
                                         "/api/v1/updates/install"}:
             origin = headers.get("origin", "")
-            if origin and origin != cfg.base_url and origin != "http://localhost:8787" and origin != "http://127.0.0.1:8787":
-                return await JSONResponse({"error": "origin_mismatch"}, status_code=403)(scope, receive, send)
-        host = headers.get("host", "").split(":", 1)[0].strip("[]")
-        if host not in {self.host, "localhost", "127.0.0.1", "::1", "kali-mcp-core"}:
-            return await JSONResponse({"error": "Unrecognized Host"}, status_code=400)(scope, receive, send)
+            if origin and origin not in {cfg.base_url, "http://localhost:8787",
+                                        "http://127.0.0.1:8787"}:
+                return await JSONResponse({"error": "origin_mismatch"}, status_code=403)(scope, receive, safe_send)
+
+        if method == "POST":
+            max_size = 262144 if path.startswith("/mcp") else 16384
+            try:
+                declared = int(headers.get("content-length", "0"))
+            except ValueError:
+                declared = max_size + 1
+            if declared > max_size:
+                return await JSONResponse({"error": "request_too_large"}, status_code=413)(scope, receive, safe_send)
+            # Also enforce the limit for chunked/streaming uploads without
+            # Content-Length, before invoking any parser or the MCP transport.
+            chunks = []
+            total = 0
+            while True:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    return
+                if message["type"] != "http.request":
+                    continue
+                chunk = message.get("body", b"")
+                total += len(chunk)
+                if total > max_size:
+                    return await JSONResponse({"error": "request_too_large"}, status_code=413)(scope, receive, safe_send)
+                chunks.append(chunk)
+                if not message.get("more_body", False):
+                    break
+            payload = b"".join(chunks)
+            replayed = False
+            original_receive = receive
+
+            async def replay_receive():
+                nonlocal replayed
+                if not replayed:
+                    replayed = True
+                    return {"type": "http.request", "body": payload, "more_body": False}
+                return await original_receive()
+
+            receive = replay_receive
+
         request = Request(scope, receive)
         admin.authenticate_request(request)
         if path == "/mcp" or path.startswith("/mcp/"):
             origin = headers.get("origin")
             if origin and origin.rstrip("/") != cfg.base_url:
-                return await JSONResponse({"error": "Origin not allowed"}, status_code=403)(scope, receive, send)
+                return await JSONResponse({"error": "Origin not allowed"}, status_code=403)(scope, receive, safe_send)
             authorization = headers.get("authorization", "")
             token = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
             client_id = oauth.verify_bearer(token)
@@ -94,18 +150,15 @@ class SecurityGate:
                 response = JSONResponse({"error": "unauthorized"}, status_code=401,
                     headers={"WWW-Authenticate": f'Bearer resource_metadata="{cfg.base_url}/.well-known/oauth-protected-resource/mcp", scope="mcp:tools"',
                              "Cache-Control": "no-store"})
-                return await response(scope, receive, send)
-            if not scope.get("state"):
-                scope["state"] = {}
-            scope["state"]["oauth_client_id"] = client_id
+                return await response(scope, receive, safe_send)
+            scope.setdefault("state", {})["oauth_client_id"] = client_id
             context_token = core.ACTOR.set("mcp:" + client_id)
             try:
-                # Record every authenticated MCP invocation even if a tool spawns child processes.
                 store.audit("mcp:" + client_id, "mcp.request", "allow", path)
-                return await self.app(scope, receive, send)
+                return await self.app(scope, receive, safe_send)
             finally:
                 core.ACTOR.reset(context_token)
-        return await self.app(scope, receive, send)
+        return await self.app(scope, receive, safe_send)
 
 
 async def health(request: Request):
