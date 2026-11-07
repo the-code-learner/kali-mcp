@@ -171,6 +171,7 @@ def revoke_client(client_id: str) -> None:
             print("MCP OAuth client tokens revoked:", client_id)
     finally:
         store.close()
+        _restore_core_sqlite_owner()
 
 
 def show_audit(limit: int = 15) -> None:
