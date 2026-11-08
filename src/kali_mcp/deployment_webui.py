@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import os
 
 from starlette.responses import HTMLResponse, RedirectResponse
@@ -165,6 +166,22 @@ async def save(ui, request):
         changes = {key: str(form.get(key) or "") for key in keys}
     elif section == "variable":
         changes = {str(form.get("key") or ""): str(form.get("value") or "")}
+    elif section == "batch":
+        raw = str(form.get("changes") or "")
+        if len(raw) > 9000:
+            return ui._form_failure(request, "Too many settings in one request", 400)
+        try:
+            changes = json.loads(raw)
+        except ValueError:
+            return ui._form_failure(request, "Invalid settings payload", 400)
+        if (not isinstance(changes, dict) or not (1 <= len(changes) <= 3)
+                or any(not isinstance(k, str) or not isinstance(v, str)
+                       for k, v in changes.items())
+                or any(k in {"KALI_MCP_ALLOWED_CIDRS",
+                             "KALI_MCP_DENIED_CIDRS",
+                             "KALI_MCP_ALLOW_ALL_TARGETS"} for k in changes)):
+            return ui._form_failure(request,
+                "Batch can change 1–3 ordinary settings; use Authorized Scope for CIDRs", 400)
     else:
         return ui._form_failure(request, "Invalid deployment settings section", 400)
     password = str(form.get("password") or "")
