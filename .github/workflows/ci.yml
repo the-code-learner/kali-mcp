@@ -23,3 +23,5 @@ jobs:
         run: python -m compileall -q src scripts tests
       - name: Unit and integration tests
         run: pytest -q
+      - name: Validate Control Center JavaScript syntax
+        run: node --check src/kali_mcp/static/control-center.js
