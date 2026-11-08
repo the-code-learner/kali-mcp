@@ -244,7 +244,7 @@ class Store:
 
     def verify_api_token(self, token: str, resource: str, issued_for: str) -> dict | None:
         """Return identity/limits for a valid key, with a constant-time digest comparison."""
-        match = re.fullmatch(r"kmp_([0-9a-f]{32})\\.([A-Za-z0-9_-]{64})", token or "")
+        match = re.fullmatch(r"kmp_([0-9a-f]{32})\.([A-Za-z0-9_-]{64})", token or "")
         if not match:
             return None
         now = int(time.time())
