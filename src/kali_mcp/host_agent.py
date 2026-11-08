@@ -31,6 +31,7 @@ import threading
 from .broker import Broker, BrokerDenied, Handler, LocalServer
 from .config import Config
 from .registry import installer_argv
+from .update_state import load as load_update_state, save as save_update_state, is_inflight
 from .superuser import DEFAULT_HOST_FILE, read_record, verify
 
 
@@ -253,8 +254,12 @@ class NativeAgent(Broker):
                              action + ":" + origin)
             return {"ok": True, "scheduled": True, "configured": list(desired),
                     "unit": unit}
+        if op == "update_status_get":
+            return {"ok": True, "update": load_update_state()}
         if op == "updates_install":
             self.require("mcp_updates", "allow_mcp_updates")
+            if is_inflight(load_update_state()):
+                raise BrokerDenied("Another update is already scheduled or running")
             requested = str(data.get("tag", ""))
             if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-beta\.[0-9]+)?", requested):
                 raise BrokerDenied("Invalid release tag")
@@ -265,13 +270,17 @@ class NativeAgent(Broker):
             # A detached transient unit survives the Agent and Core being restarted
             # by their own installer. The command and tag are bounded, never supplied
             # as arbitrary executable text by a client.
-            command = ["systemd-run", "--collect", "--unit=" + unit,
+            command = ["systemd-run", "--collect", "--on-active=3s", "--unit=" + unit,
                 "--setenv=KALI_MCP_VERSION=" + requested,
                 "--setenv=KALI_MCP_RELEASE_CHANNEL=" + self.cfg.update_channel,
-                "/bin/bash", "/opt/kali-mcp/current/scripts/install-hybrid.sh", "--upgrade"]
+                "/usr/bin/python3",
+                "/opt/kali-mcp/current/scripts/upgrade_supervisor.py",
+                "--tag", requested]
             result = self._run(command, timeout=20)
             if result.get("exit_code") != 0:
                 raise BrokerDenied("systemd could not schedule the upgrade")
+            save_update_state(state="scheduled", phase="scheduled", tag=requested,
+                              unit=unit, detail="Installer scheduled; awaiting systemd start")
             self.store.audit("admin", "update.schedule", "allow", requested)
             return {"ok": True, "scheduled": True, "unit": unit, "tag": requested}
         if op == "package_install":

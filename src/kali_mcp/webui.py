@@ -200,7 +200,7 @@ class UI:
         if not self.cfg.ceilings()["mcp_updates"]["allowed"]:
             return False, ("Update installation is disabled by the deployment ceiling "
                            "KALI_MCP_ALLOW_MCP_UPDATES=false. Enable it in the "
-                           "SSH wizard (sudo kali-mcp, option w), and then enable "
+                           "Deployment & Security → Permissions, and then enable "
                            "the MCP Updates switch in WebUI.")
         if not self.store.get_setting("mcp_updates"):
             return False, ("Update installation is currently off. Enable "
@@ -524,6 +524,24 @@ class UI:
     async def deployment_settings_save(self, request: Request):
         from .deployment_webui import save
         return await save(self, request)
+
+    async def control_center(self, request: Request):
+        from .control_center import page
+        return await page(self, request)
+
+    async def control_center_snapshot(self, request: Request):
+        from .control_center import snapshot
+        return await snapshot(self, request)
+
+    async def job_report_live(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        job_id = str(request.path_params["job_id"])
+        if self.store.get_job(job_id) is None:
+            return self._browser_notice("Job not found",
+                                        "The selected job is not available.", 404)
+        return RedirectResponse("/?page=files&job=" + job_id,
+                                status_code=303, headers={"Cache-Control": "no-store"})
 
     async def dashboard(self, request: Request):
         if not request.state.admin:
@@ -891,7 +909,13 @@ class UI:
 
     async def static(self, request: Request):
         name = str(request.path_params["name"])
-        if name not in {"app.css", "app.js"}:
+        if name not in {"app.css", "app.js", "control-center.css",
+                        "control-center.js"}:
             return Response(status_code=404)
         return FileResponse(Path(__file__).resolve().parent / "static" / name,
-                            headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+                            headers={
+                                # JS/CSS change between beta releases. Never serve
+                                # a stale bundle across a Core self-upgrade.
+                                "Cache-Control": ("private, no-store" if name.startswith("control-center")
+                                                  else "private, max-age=3600"),
+                                "X-Content-Type-Options": "nosniff"})
