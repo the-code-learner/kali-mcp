@@ -119,7 +119,7 @@ def write_private(path: Path, data: dict[str, str] | str) -> None:
     """Durable atomic private-file replacement, never truncate live config."""
     path.parent.mkdir(parents=True, exist_ok=True)
     content = (data if isinstance(data, str) else
-               "".join(f"{key}={value}\\n" for key, value in data.items()))
+               "".join(f"{key}={value}\n" for key, value in data.items()))
     fd, temporary = tempfile.mkstemp(prefix="." + path.name + "-", dir=path.parent)
     try:
         os.fchmod(fd, 0o600)
@@ -142,7 +142,7 @@ def is_complete(path: Path) -> bool:
     """A marker is valid only with all expected credentials/environment files."""
     try:
         marker = path / "config.ready"
-        if marker.read_text(encoding="utf-8") != "v1\\n":
+        if marker.read_text(encoding="utf-8") != "v1\n":
             return False
         stack, agent = parse_env(path / "stack.env"), parse_env(path / "agent.env")
         read_record(path / "superuser.json")
@@ -274,7 +274,7 @@ def configure(path: Path, gid: int, *, interactive: bool, host_user: str = "kali
     host["KALI_MCP_SUPERUSER_FILE"] = "/etc/kali-mcp/superuser.json"
     write_private(path / "agent.env", host)
     # The completion marker must be the very last publication step.
-    write_private(path / "config.ready", "v1\\n")
+    write_private(path / "config.ready", "v1\n")
     if not is_complete(path):
         raise RuntimeError("Configuration failed post-commit validation")
     print("\nConfiguration saved with hashed superuser credentials (no plaintext password in Compose).")
