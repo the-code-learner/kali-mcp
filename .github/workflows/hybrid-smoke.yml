@@ -34,6 +34,7 @@ jobs:
           sudo env KALI_MCP_VERSION="$SRC_REF" \
             KALI_MCP_ADMIN_PASSWORD=CI_HYBRID_PASSWORD_TEST_ONLY_2026 \
             KALI_MCP_ACCESS_MODE=local \
+            KALI_MCP_BROWSER_ORIGINS=https://llm.example.test \
             KALI_MCP_RELEASE_CHANNEL=beta \
             bash scripts/install-hybrid.sh --non-interactive
       - name: Prepare root-only CLI test credential
@@ -102,6 +103,7 @@ jobs:
       - name: Verify OAuth consent and protected MCP tools/list
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: CI_HYBRID_PASSWORD_TEST_ONLY_2026
+          KALI_MCP_SMOKE_BROWSER_ORIGIN: https://llm.example.test
         run: python3 scripts/smoke_http.py
       - name: Verify idempotent upgrade preserves settings and recreates Core
         run: |
