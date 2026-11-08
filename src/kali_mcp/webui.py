@@ -11,12 +11,15 @@ import os
 from pathlib import Path
 import secrets
 import time
+import urllib.request
+import urllib.error
 from urllib.parse import urlparse
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse, FileResponse
 
 from .config import Config
+from .browser_origins import validate_browser_origin
 from .policy import Policy, PolicyDenied
 from .releases import UpdateChecker, installed_release_tag, is_update_available
 from .store import Store, digest
@@ -293,6 +296,156 @@ class UI:
         if not revoked:
             return JSONResponse({"error": "API token not found or already revoked"}, status_code=404)
         return RedirectResponse("/", status_code=303)
+
+    @staticmethod
+    def _browser_notice(title: str, message: str, code: int = 200) -> HTMLResponse:
+        body = ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
+          <title>Kali MCP — Browser CORS</title>
+          <meta name="viewport" content="width=device-width">
+          <link rel="stylesheet" href="/static/app.css"></head>
+          <body><main class="report"><section><h2>""" +
+          html.escape(title) + "</h2><p>" + html.escape(message) +
+          """</p><a href="/">Return to dashboard</a></section></main></body></html>""")
+        return HTMLResponse(body, status_code=code, headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "same-origin",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'",
+        })
+
+    async def browser_origins_update(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        form = await request.form()
+        if (error := self._csrf(request, str(form.get("csrf") or ""))):
+            return error
+        if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() != "true":
+            return self._browser_notice("Unavailable", "Native Host Agent is required.", 403)
+        try:
+            origin = validate_browser_origin(str(form.get("origin") or ""))
+            action = str(form.get("action") or "")
+            if action not in {"add", "remove"}:
+                raise ValueError("Invalid action")
+            password = str(form.get("password") or "")
+            if not password or len(password) > 256:
+                raise ValueError("Superuser password confirmation is required")
+            from .broker_client import call
+            outcome = await asyncio.to_thread(
+                call, self.cfg.broker_socket, "browser_origins_update", {
+                    "origin": origin, "action": action,
+                    "superuser_name": request.state.admin_username,
+                    "superuser_password": password,
+                }, timeout=30)
+            self.store.audit("webui:" + request.state.admin_username,
+                             "browser_origins." + action, "allow", origin)
+            if outcome.get("unchanged"):
+                return RedirectResponse("/?cors=unchanged", status_code=303)
+            return RedirectResponse("/?cors=scheduled", status_code=303)
+        except (ValueError, OSError, RuntimeError) as exc:
+            self.store.audit("webui", "browser_origins.update", "deny",
+                             type(exc).__name__)
+            return self._browser_notice("Browser origin not changed",
+                                        str(exc)[:220], 403)
+
+    @staticmethod
+    def _browser_probe(origin: str, host: str, bearer: str) -> dict:
+        """Local-only real HTTP CORS/Host/MCP check, never echo the Bearer secret."""
+        base = "http://127.0.0.1:8000/mcp"
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        shared = {"Host": host, "Origin": origin}
+        def fetch(request):
+            try:
+                with opener.open(request, timeout=8) as response:
+                    return response.status, response.headers, response.read(8192)
+            except urllib.error.HTTPError as exc:
+                return exc.code, exc.headers, exc.read(8192)
+        try:
+            preflight = urllib.request.Request(base, method="OPTIONS", headers={
+                **shared, "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers":
+                    "authorization,content-type,mcp-protocol-version",
+            })
+            cors_status, cors_headers, _ = fetch(preflight)
+            allowed = cors_status == 204 and cors_headers.get(
+                "Access-Control-Allow-Origin") == origin
+            result = {"cors": "allowed" if allowed else "denied",
+                      "preflight_http": cors_status, "host": "not tested",
+                      "mcp": "not tested"}
+            if not allowed:
+                return result
+            if not bearer:
+                result["mcp"] = ("No credential supplied: MCP authentication and "
+                                 "SDK Host validation were not tested.")
+                return result
+            if len(bearer) > 512 or "\r" in bearer or "\n" in bearer:
+                raise ValueError("Bearer token must be nonempty, bounded and free of newlines")
+            headers = {**shared, "Authorization": "Bearer " + bearer,
+                       "Content-Type": "application/json",
+                       "Accept": "application/json, text/event-stream",
+                       "MCP-Protocol-Version": "2025-06-18"}
+            def rpc(method, params):
+                payload = json.dumps({"jsonrpc": "2.0", "id": 1,
+                                      "method": method, "params": params}).encode()
+                return fetch(urllib.request.Request(base, method="POST",
+                                                    data=payload, headers=headers))
+            status, _, body = rpc("initialize", {
+                "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": {"name": "kali-mcp-cors-check", "version": "1.0"}})
+            result["initialize_http"] = status
+            if status == 421:
+                result["host"] = "rejected by MCP SDK (421)"
+                result["mcp"] = "not initialized"
+                return result
+            if status == 401:
+                result["host"] = "not reached (invalid or revoked credential)"
+                result["mcp"] = "authentication rejected (401)"
+                return result
+            if status != 200:
+                result["host"] = "MCP error (HTTP " + str(status) + ")"
+                return result
+            try:
+                info = json.loads(body)
+                if "serverInfo" not in info.get("result", {}):
+                    raise ValueError("Missing MCP serverInfo")
+            except (ValueError, TypeError):
+                result["host"] = "passed"
+                result["mcp"] = "invalid initialize response"
+                return result
+            result["host"] = "passed (no-port public Host)"
+            list_status, _, list_body = rpc("tools/list", {})
+            result["tools_list_http"] = list_status
+            if list_status == 200:
+                try:
+                    tools = json.loads(list_body).get("result", {}).get("tools", [])
+                    result["mcp"] = "initialize and tools/list succeeded (" + str(len(tools)) + " tools)"
+                except (ValueError, TypeError):
+                    result["mcp"] = "tools/list returned malformed JSON"
+            else:
+                result["mcp"] = "tools/list rejected (HTTP " + str(list_status) + ")"
+            return result
+        except (OSError, ValueError) as exc:
+            return {"cors": "probe failed", "host": "unknown", "mcp": "not tested",
+                    "error": type(exc).__name__}
+
+    async def browser_origins_check(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        form = await request.form()
+        if (error := self._csrf(request, str(form.get("csrf") or ""))):
+            return error
+        try:
+            origin = validate_browser_origin(str(form.get("origin") or ""))
+            bearer = str(form.get("bearer") or "")
+            public_host = urlparse(self.cfg.base_url).hostname
+            if not public_host:
+                raise ValueError("Public host is not configured")
+            if ":" in public_host:
+                public_host = "[" + public_host + "]"
+            result = await asyncio.to_thread(self._browser_probe, origin,
+                                             public_host, bearer)
+            details = " | ".join(str(k) + ": " + str(v) for k, v in result.items())
+            return self._browser_notice("MCP browser CORS diagnostic", details)
+        except ValueError as exc:
+            return self._browser_notice("Invalid browser origin", str(exc), 400)
 
     async def dashboard(self, request: Request):
         if not request.state.admin:
