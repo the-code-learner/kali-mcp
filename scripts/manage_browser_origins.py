@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from kali_mcp.browser_origins import parse_browser_origins
+from kali_mcp.cli_config import parse_env
 
 CONFIG = Path("/etc/kali-mcp")
 ROOT = Path("/opt/kali-mcp/current")
@@ -102,7 +103,7 @@ def run_compose() -> None:
         "import os; print(os.getenv('KALI_MCP_BROWSER_ORIGINS', ''))",
     ], text=True, timeout=15).strip()
     expected = ",".join(parse_browser_origins(
-        (CONFIG / "stack.env").read_text(encoding="utf-8").split(KEY + "=", 1)[1].splitlines()[0]
+        parse_env(CONFIG / "stack.env").get(KEY, "")
     ))
     if actual != expected:
         raise RuntimeError("Container did not load the requested browser-origin allowlist")
