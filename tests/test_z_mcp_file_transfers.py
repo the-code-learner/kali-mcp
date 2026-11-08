@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 from urllib.parse import urlparse
 
@@ -47,7 +48,7 @@ def test_base64_roundtrip_and_client_isolation(tmp_path):
         vault.get_file(OTHER, file_id, "openlink")
     with pytest.raises(TransferError, match="not found"):
         vault.delete(OTHER, file_id)
-    with pytest.raises(TransferError, match="256 KiB"):
+    with pytest.raises(TransferError, match="128 KiB"):
         vault.put_base64(OWNER, "too-big.bin", "application/octet-stream",
                          base64.b64encode(bytes(MAX_BASE64_FILE + 1)).decode())
     for invalid in ("../../etc/passwd", "/root/.ssh/id_rsa", "../x",
@@ -100,9 +101,76 @@ def test_openlink_file_capability_one_time_exact_bytes_and_expiration(tmp_path):
                                          too_many(), None))
     assert not any(x["file_id"] == bad_size["file_id"]
                    for x in vault.list_files(OWNER)["files"])
-    with pytest.raises(TransferError, match="8 MiB"):
+    with pytest.raises(TransferError, match="100 MB"):
         vault.begin_upload(OWNER, "huge.bin", "application/octet-stream",
                            MAX_OPENLINK_FILE + 1)
+    store.close()
+
+
+def test_hundred_megabyte_limits_and_chunked_base64_roundtrip(tmp_path):
+    store, vault = make_vault(tmp_path)
+    # Reserve exactly 100 MB without allocating 100 MB of RAM. The stream
+    # itself is bounded by the declared size and the disk quota.
+    largest = vault.begin_upload(OWNER, "100mb.bin",
+                                  "application/octet-stream", 100_000_000)
+    assert largest["bytes"] == 100_000_000
+    assert largest["mode"] == "openlink"
+    assert vault.delete(OWNER, largest["file_id"])["ok"] is True
+    with pytest.raises(TransferError, match="100 MB"):
+        vault.begin_upload(OWNER, "too-big.bin",
+                           "application/octet-stream", 100_000_001)
+    with pytest.raises(TransferError, match="100 MB"):
+        vault.begin_base64(OWNER, "too-big.bin",
+                           "application/octet-stream", 100_000_001)
+
+    payload = bytes(range(256)) * 1581  # > 390 KiB; multiple Base64 RPCs
+    started = vault.begin_base64(OWNER, "chunked.dat",
+                                  "application/octet-stream", len(payload))
+    assert started["chunk_bytes"] == 128 * 1024
+    assert started["bytes"] == len(payload)
+    file_id = started["file_id"]
+    position = 0
+    while position < len(payload):
+        piece = payload[position:position + started["chunk_bytes"]]
+        result = vault.append_base64(OWNER, file_id, position,
+                                     base64.b64encode(piece).decode())
+        position = result["written"]
+    assert result["remaining"] == 0
+    with pytest.raises(TransferError, match="offset"):
+        vault.append_base64(OWNER, file_id, 0, base64.b64encode(b"replay").decode())
+    with pytest.raises(TransferError, match="not found"):
+        vault.append_base64(OTHER, file_id, position, base64.b64encode(b"x").decode())
+
+    sealed = vault.finish_base64(OWNER, file_id)
+    assert sealed["bytes"] == len(payload)
+    assert sealed["sha256"] == hashlib.sha256(payload).hexdigest()
+    fragments = []
+    position = 0
+    while True:
+        part = vault.get_file(OWNER, file_id, "base64", position)
+        assert part["offset"] == position
+        assert len(part["data_base64"]) <= 174764  # 128 KiB raw
+        raw = base64.b64decode(part["data_base64"])
+        assert part["chunk_sha256"] == hashlib.sha256(raw).hexdigest()
+        fragments.append(raw)
+        position = part["next_offset"]
+        if part["done"]:
+            break
+    assert b"".join(fragments) == payload
+    assert position == len(payload)
+    with pytest.raises(TransferError, match="128 KiB"):
+        vault.get_file(OWNER, file_id, "base64", 0, MAX_BASE64_FILE + 1)
+    with pytest.raises(TransferError, match="not found"):
+        vault.get_file(OTHER, file_id, "base64")
+
+    incomplete = vault.begin_base64(OWNER, "incomplete.dat",
+                                    "application/octet-stream", 1000)
+    with pytest.raises(TransferError, match="incomplete"):
+        vault.finish_base64(OWNER, incomplete["file_id"])
+    with pytest.raises(TransferError, match="offset"):
+        vault.append_base64(OWNER, incomplete["file_id"], 1,
+                            base64.b64encode(b"test").decode())
+    vault.delete(OWNER, incomplete["file_id"])
     store.close()
 
 
