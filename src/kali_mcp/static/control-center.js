@@ -444,21 +444,38 @@ function getFormError(source){
  const blocks=[...doc.querySelectorAll('h2,p')].map(n=>n.textContent.trim()).filter(Boolean);
  return (blocks.join(' — ')||'La richiesta è stata rifiutata').slice(0,380);
 }
-async function postLive(path, form){
+async function postLive(path, form, options={}){
  const fields=new URLSearchParams({...form,csrf:CSRF});
+ const wantsJSON=options.expectJSON===true;
  try{
    const response=await fetch(path,{method:'POST',credentials:'same-origin',
      headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8',
-              Accept:'text/html'},body:fields,redirect:'follow',cache:'no-store'});
+              Accept:wantsJSON?'application/json':'text/html'},body:fields,
+              redirect:'follow',cache:'no-store'});
    if(new URL(response.url).pathname==='/login'||response.status===401){
      window.location.assign('/login?reason=session-expired&next=/');
      return null;
    }
    const text=await response.text();
    if(!response.ok){
-     const msg=getFormError(text);
-     toast(msg,'bad');
+     let msg=getFormError(text);
+     if(response.headers.get('content-type')?.includes('application/json')){
+       try{msg=JSON.parse(text).error||msg;}catch(e){}
+     }
+     toast('Modifica non applicata: '+msg,'bad');
      return null;
+   }
+   if(wantsJSON){
+     let result;
+     try{result=JSON.parse(text);}catch(e){
+       toast('Risposta del server non verificabile. Ricontrolla lo stato prima di ripetere.','bad');
+       return null;
+     }
+     if(result.scheduled)toast('Modifica programmata. Attendo la conferma del worker systemd.');
+     else if(result.unchanged)toast('Configurazione già identica sul server.');
+     else toast('Risposta ricevuta, verifico l\'applicazione effettiva.');
+     await refreshLive();
+     return result;
    }
    const htmlDoc=new DOMParser().parseFromString(text,'text/html');
    const token=htmlDoc.querySelector('textarea[readonly]');
