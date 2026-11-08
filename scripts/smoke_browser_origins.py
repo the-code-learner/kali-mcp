@@ -10,6 +10,9 @@ import os
 from pathlib import Path
 import subprocess
 import time
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from kali_mcp.broker_client import call
 from kali_mcp.cli_config import parse_env
