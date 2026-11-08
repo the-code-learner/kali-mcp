@@ -54,6 +54,580 @@ let ticker=null;function tick(){if(state.updateRun!=='running')return;state.upda
 function saveScope(){state.draftAllowed=document.getElementById('allowedCidrs')?.value??state.draftAllowed;state.draftDenied=document.getElementById('deniedCidrs')?.value??state.draftDenied;const items=v=>v.split(/[\n,]+/).map(s=>s.trim()).filter(Boolean);if(state.mode==='all'&&!items(state.draftDenied).length)return toast('Allow all richiede almeno una subnet esclusa.','bad');if(state.mode==='all'&&document.getElementById('allowConfirm')?.value!=='ALLOW ALL')return toast('Scrivi esattamente ALLOW ALL per confermare.','bad');if(state.mode==='allowlist'&&items(state.draftAllowed).some(s=>s==='0.0.0.0/0'||s==='::/0'))return toast('Per un perimetro generale usa Allow all con blacklist.','bad');modal('Conferma modifica scope',`In produzione verrà richiesta di nuovo la <strong>password del superuser</strong>, verificata sul Native Host Agent. Qui non inserire password reali.`, 'Conferma simulata','modal-confirm',()=>{state.cfg.KALI_MCP_ALLOW_ALL_TARGETS=state.mode==='all'?'true':'false';state.cfg.KALI_MCP_ALLOWED_CIDRS=state.draftAllowed;state.cfg.KALI_MCP_DENIED_CIDRS=state.draftDenied;state.tests.scope=true;log('superuser','scope.update',state.mode+' / deny '+state.draftDenied);toast('Scope aggiornato nella simulazione.');render()})}
 function addOrigin(){const value=document.getElementById('originField')?.value.trim()||'';if(!/^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(value))return toast('Inserisci una origin HTTPS esatta, senza path o wildcard.','bad');if(state.origins.includes(value))return toast('Questa origin è già autorizzata.','bad');modal('Autorizza origine',`Aggiungere <code>${esc(value)}</code> alla allowlist CORS del Core? La conferma del superuser viene simulata.`, 'Autorizza (demo)','modal-confirm',()=>{state.origins.push(value);state.tests.cors=true;log('superuser','cors.origin.add',value);toast('Origin aggiunta nella simulazione.');render()})}
 function newToken(){document.getElementById('overlay').innerHTML=`<div class="modalcover"><div class="modal" role="dialog" aria-modal="true"><h2>Nuovo API Token — demo</h2><p>Il valore verrà mostrato una sola volta. Non inserire dati reali.</p><label class="field"><span>Nome client</span><input id="tokenName" class="textinput" value="Nuovo client demo"></label><label class="field" style="margin-top:12px"><span>Durata</span><select id="tokenDays"><option>30</option><option>7</option><option>90</option></select></label><div class="modal-foot">${button('Annulla','modal-cancel')}${button('Crea token demo','create-token','primary')}</div></div></div>`}
-function actionClick(a,el){if(LIVE_ACTIONS.has(a)){liveAction(a,el);return;}const v=el?.dataset.value;switch(a){case'nav':return goto(v);case'goto-updates':return goto('updates');case'goto-scope':return goto('scope');case'goto-permissions':return goto('permissions');case'goto-clients':return goto('clients');case'goto-logs':return goto('logs');case'mobile':document.getElementById('side').classList.toggle('open');return;case'theme':state.theme=v;render();return;case'help':return goto('lab');case'check-update':state.checked=true;log('webui','updates.check','Release demo disponibile');toast('Controllo simulato: release di esempio disponibile.');return;case'install':return modal('Avvia aggiornamento?','Questa è una <strong>simulazione</strong>. Il job rimarrà visibile durante riavvio e riconnessione, senza alcuna operazione sul Raspberry.','Avvia demo','modal-confirm',startUpdate);case'fail-next':state.failNext=true;return toast('Nel prossimo tentativo verrà simulato un healthcheck fallito.');case'mode':state.draftAllowed=document.getElementById('allowedCidrs')?.value??state.draftAllowed;state.draftDenied=document.getElementById('deniedCidrs')?.value??state.draftDenied;state.mode=v;return render();case'probe-one':state.testIP='192.168.0.1';document.getElementById('probeIP').value=state.testIP;document.getElementById('probeResult').innerHTML=scopeResult(state.testIP);return;case'probe-denied':state.testIP='192.168.137.42';document.getElementById('probeIP').value=state.testIP;document.getElementById('probeResult').innerHTML=scopeResult(state.testIP);return;case'save-scope':return saveScope();case'scope-focus':document.getElementById('probeIP')?.focus();return;case'ceiling':{let key=v;let current=state.cfg[key]==='true';let risky=/ROOT|HOST_EXEC|NETWORK_CHANGES|PACKAGE_INSTALL/.test(key);return modal(risky?'Modifica di sicurezza critica':'Conferma impostazione',`<code>${esc(key)}</code><br>Nuovo valore: <strong>${current?'false':'true'}</strong>. Nella WebUI vera è obbligatoria la password superuser.`, 'Conferma simulata','modal-confirm',()=>applyValue(key,current?'false':'true'))}case'runtime':{let id=v,ceiling=runtime.find(x=>x[0]===id)?.[3];if(state.cfg[ceiling]!=='true')return toast('Prima devi autorizzare il limite di deployment.','bad');return modal('Modifica abilitazione runtime',`Stai per ${state.runtime[id]?'disabilitare':'abilitare'} <strong>${esc(id)}</strong> (demo).`, 'Conferma simulata','modal-confirm',()=>{state.runtime[id]=!state.runtime[id];log('superuser','capability.toggle',id);render()})}case'new-token':return newToken();case'create-token':{const name=document.getElementById('tokenName')?.value||'Demo';state.api.unshift({name,id:'tok_demo_'+Math.random().toString(36).slice(2,6),expires:'2026-12-08',status:'Attivo'});state.tokenReveal='kmp_demo_NOT_REAL_'+Math.random().toString(36).slice(2,17);log('superuser','token.create',name);closeModal();toast('Token demo creato e mostrato una sola volta.');return render()}case'revoke-token':{const i=+el.dataset.index;return modal('Revoca API Token',`Revocare <strong>${esc(state.api[i]?.name)}</strong>? Questa azione non si può annullare nella UI reale.`, 'Revoca (demo)','modal-confirm',()=>{state.api[i].status='Revocato';log('superuser','token.revoke',state.api[i].id);render()})}case'rotate-token':{const i=+el.dataset.index;return modal('Ruota API Token',`Ruotare <strong>${esc(state.api[i]?.name)}</strong>? Il vecchio token smetterà di funzionare.`, 'Ruota (demo)','modal-confirm',()=>{state.tokenReveal='kmp_demo_ROTATED_'+Math.random().toString(36).slice(2,13);log('superuser','token.rotate',state.api[i].id);render()})}case'revoke-oauth':{const i=+el.dataset.index;return modal('Revoca client OAuth',`Revocare <strong>${esc(state.oauth[i]?.name)}</strong> e i relativi grant?`, 'Revoca (demo)','modal-confirm',()=>{state.oauth[i].status='Revocato';log('superuser','oauth.revoke',state.oauth[i].id);render()})}case'add-origin':return addOrigin();case'focus-origin':return document.getElementById('originField')?.focus();case'remove-origin':{const i=+el.dataset.index;return modal('Rimuovi origine CORS',`Rimuovere <code>${esc(state.origins[i])}</code> dalla allowlist?`, 'Rimuovi (demo)','modal-confirm',()=>{state.origins.splice(i,1);render();toast('Origin rimossa nella simulazione.');log('superuser','cors.origin.remove','')})}case'test-cors':{const url=document.getElementById('corsProbe')?.value;const area=document.getElementById('corsResult');if(!url)return toast('Seleziona un’origine da verificare.','bad');area.innerHTML=`<div class="notice success">${ic('check',17)}<div><strong>Simulazione: OPTIONS 204, Host OK, initialize OK, tools/list OK</strong><div class="smalltext">Il test reale richiede richieste HTTP e Bearer al backend, qui non avviene.</div></div></div>`;state.tests.cors=true;return toast('Diagnostica demo completata.')}case'focus-file':return document.getElementById('demoFile')?.focus();case'upload':{const f=document.getElementById('demoFile')?.files?.[0];if(!f)return toast('Seleziona un file locale, senza inviarlo.','bad');if(f.size>100000000)return toast('Il limite per singolo file è 100 MB.','bad');const mode=document.getElementById('fileMode').value;state.files.unshift({name:f.name,size:f.size,mode:mode==='openlink'?'OpenLink':'Base64',status:'Completato'});log('mcp:demo','files.upload',f.name);toast('Upload simulato: solo metadati, nessun byte trasmesso.');return render()}case'job-detail':return modal('Dettagli job · demo',`<code>${esc(el.dataset.job)}</code><br><br>Qui il prodotto reale dovrebbe leggere <code>/api/v1/jobs/{id}</code> e gli eventi dell'installer, mostrare progressi e aggiornarsi anche dopo il riavvio del Core.`, 'Chiudi','modal-cancel');case'error-demo':return modal('Impossibile applicare la modifica','La sessione amministrativa è scaduta. <strong>Nessun cambiamento è stato salvato.</strong><br><br>Accedi nuovamente e ripeti l’azione. Questo messaggio sostituisce il JSON grezzo.','Ho capito','modal-cancel');case'edit-setting':return confirmEdit(el.dataset.key);case'edit-confirm':{const key=el.dataset.key,val=document.getElementById('editVal')?.value;closeModal();state.tests.settings=true;return applyValue(key,val)}case'apply-config':{const items=[...document.querySelectorAll('[data-config]')];if(!items.length)return;const edits=items.map(e=>[e.dataset.config,e.value]).filter(([k,val])=>state.cfg[k]!==val);if(!edits.length)return toast('Nessuna modifica da applicare.');return modal('Salva configurazione','Applica '+edits.length+' impostazione/i nella sola simulazione? In produzione è necessaria la conferma superuser.','Applica (demo)','modal-confirm',()=>{edits.forEach(([k,v])=>state.cfg[k]=v);log('superuser','deployment.batch.update',edits.map(x=>x[0]).join(', '));toast('Modifiche applicate nella simulazione.');render()})}case'scenario':return goto(v);case'reset-demo':return modal('Reimposta demo','Le modifiche simulated, il job e i risultati del test verranno azzerati ricaricando lo staging.','Reimposta','modal-confirm',()=>location.reload());case'modal-cancel':return closeModal();case'modal-confirm':{const fn=window.pendingConfirm;closeModal();if(fn)fn();return}default:return}}
-document.addEventListener('click',event=>{const btn=event.target.closest('[data-action]');if(btn){event.preventDefault();actionClick(btn.dataset.action,btn)}});document.addEventListener('input',event=>{if(event.target.id==='allowedCidrs'||event.target.id==='deniedCidrs'){state.draftAllowed=document.getElementById('allowedCidrs').value;state.draftDenied=document.getElementById('deniedCidrs').value;document.getElementById('probeResult').innerHTML=scopeResult(state.testIP)}else if(event.target.id==='probeIP'){state.testIP=event.target.value;document.getElementById('probeResult').innerHTML=scopeResult(state.testIP)}else if(event.target.id==='settingSearch'){const pos=event.target.selectionStart;state.search=event.target.value;const list=document.querySelector('tbody');if(list){const matches=configs.filter(x=>[x[0],x[1],x[4]].join(' ').toLowerCase().includes(state.search.toLowerCase()));list.innerHTML=matches.map(([key,group,type,def,desc])=>`<tr><td><strong class="mono">${esc(key)}</strong><div class="micro">${esc(desc)}</div></td><td>${badge(group,'blue')}</td><td><code>${esc(state.cfg[key]||'(vuoto)')}</code></td><td>${button('Modifica','edit-setting','small',`data-key="${key}"`)}</td></tr>`).join('')}}});document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.getElementById('overlay').children.length)closeModal()});startLive();
+
+/* LIVE CONTROL CENTER — no demo mutations, real backend authorization only. */
+const LIVE_ACTIONS = new Set(['check-update','install','fail-next','save-scope','ceiling',
+  'runtime','new-token','create-token','rotate-token','revoke-token','revoke-oauth',
+  'add-origin','remove-origin','test-cors','upload','job-detail','error-demo',
+  'edit-setting','edit-confirm','apply-config','reset-demo','logout','live-submit',
+  'live-create-token']);
+const LIVE_PHASES = ['scheduled','preflight','download','verify','backup',
+                     'configuration','dependencies','activation','healthcheck','completed'];
+const CSRF = document.querySelector('meta[name="kali-csrf"]')?.content || '';
+let livePending = null;
+let liveRefreshTimer = null;
+let lastSnapshot = null;
+let liveJobId = null;
+state.hasSnapshot = false;
+state.scopeDirty = false;
+state.coreOnline = false;
+state.agentOnline = false;
+state.jobs = [];
+state.inventory = [];
+state.api = [];
+state.oauth = [];
+state.origins = [];
+state.files = [];
+state.events = [];
+state.tokenReveal = '';
+state.installed = 'In caricamento';
+state.latest = 'In caricamento';
+state.updateRun = 'idle';
+state.updateIndex = -1;
+state.updatePhase = 'scheduled';
+state.runDetails = '';
+state.allowInstall = false;
+state.updateGuidance = '';
+state.updateError = '';
+state.updatedAt = null;
+state.serverError = '';
+
+function liveBadge(value, category) { return badge(String(value), category || 'blue'); }
+function liveOverview() {
+ const updating = ['scheduled','running'].includes(state.updateRun);
+ const health = state.agentOnline ? 'Connesso' : 'Non disponibile';
+ const rows = state.events.slice(0,5).map(x =>
+   '<div class="setting-row"><div class="grow"><div class="label">'+esc(x.action)+'</div><p>'+
+   esc(x.actor)+' · '+esc(x.detail || '—')+'</p></div>'+
+   liveBadge(x.status, x.status==='DENIED'?'red':'green')+'</div>').join('');
+ return head('OPERATIONS','Control Center','Stato reale dell’istanza e accesso immediato alle operazioni.',
+   button('Gestisci aggiornamenti','goto-updates','primary'))+
+   '<div class="grid cols4">'+
+   stat('Core MCP','Online','green','server','Endpoint autenticato')+
+   stat('Native Host Agent',health,state.agentOnline?'green':'red','activity','Socket systemd')+
+   stat('MCP endpoint','Protetto','blue','lock','OAuth 2.0 · API Bearer')+
+   stat('Versione installata',state.installed,'blue','update','Versione dal Core')+
+   '</div>'+section('Da controllare','Stato aggiornato automaticamente')+
+   '<div class="grid cols2">'+
+   card('<div class="card-top"><div><h2>'+ic('update',16)+' Aggiornamenti</h2><p>Stato installer persistente sul Native Agent.</p></div>'+
+     liveBadge(updating?'In corso':state.updateRun==='failed'?'Fallito':state.updateRun==='rolled_back'?'Rollback': 'Disponibile',
+       updating?'orange':state.updateRun==='failed'?'red':'blue')+'</div>'+
+     '<div class="split"><div class="smalltext">Installata <strong>'+esc(state.installed)+
+     '</strong><br>GitHub: '+esc(state.latest)+'</div>'+button('Apri','goto-updates','primary')+'</div>'+
+     (updating?'<div class="bar" style="margin-top:14px"><i style="width:'+
+       Math.max(7,Math.round((state.updateIndex+1)/LIVE_PHASES.length*100))+'%"></i></div>':''))+
+   card('<div class="card-top"><div><h2>'+ic('shield',16)+' Authorized Scope</h2><p>Blacklist prioritaria sugli adapter tipizzati.</p></div>'+
+     liveBadge(state.cfg.KALI_MCP_ALLOW_ALL_TARGETS==='true'?'Allow all + blacklist':'Allowlist','orange')+
+     '</div><div class="split"><span class="smalltext">Escluse: <code>'+
+     esc(state.cfg.KALI_MCP_DENIED_CIDRS||'nessuna')+'</code></span>'+
+     button('Gestisci','goto-scope')+'</div>')+
+   card('<div class="card-top"><div><h2>'+ic('key',16)+' Permessi sensibili</h2><p>Ceilings e abilitazioni runtime separati.</p></div>'+
+     liveBadge(state.runtime.host_root?'Root attivo':'Root disabilitato',
+       state.runtime.host_root?'red':'green')+'</div><div class="split"><span class="smalltext">Host Exec '+
+     (state.runtime.host_exec?'attivo':'disattivato')+'</span>'+
+     button('Controlla','goto-permissions')+'</div>')+
+   card('<div class="card-top"><div><h2>'+ic('globe',16)+' Client MCP</h2><p>OAuth, token e origini CORS distinte.</p></div>'+
+     liveBadge(String(state.origins.length)+' origini','blue')+
+     '</div><div class="split"><span class="smalltext">'+
+     state.api.filter(x=>x.status==='Attivo').length+' token attivi · '+state.oauth.length+
+     ' client OAuth</span>'+button('Gestisci','goto-clients')+'</div>')+
+   '</div>'+section('Ultima attività','Audit reale')+
+   card('<div class="rowlist">'+(rows||'<p class="muted">Nessun evento recente</p>')+'</div>','flat');
+}
+
+function liveUpdates(){
+ const run=state.updateRun, running=['running','scheduled'].includes(run);
+ const completed=run==='completed', failed=['failed','rolled_back'].includes(run);
+ const current=LIVE_PHASES.indexOf(state.updatePhase);
+ const idx=completed?LIVE_PHASES.length-1:Math.max(0,current);
+ const status=completed?'Verificato':run==='rolled_back'?'Rollback':run==='failed'?'Errore':
+   running?'Installer attivo': 'Nessun aggiornamento in corso';
+ const percent=completed?100:Math.min(95,Math.round((idx+1)*100/LIVE_PHASES.length));
+ const uiSteps=['Richiesta accettata','Preflight','Download release','Verifica release',
+   'Backup','Configurazione','Dipendenze','Riavvio servizi','Healthcheck','Versione verificata'];
+ const timeline=uiSteps.map((label,i)=>{
+   const mode=completed?'done':failed&&idx===i?'failed':i<idx?'done':i===idx&&running?'active':'';
+   return '<li class="'+mode+'"><span class="stepdot">'+(i<idx||completed?'✓':i+1)+
+     '</span><span>'+esc(label)+'</span><small>'+
+     (i<idx||completed?'OK':failed&&i===idx?'Fallito':i===idx&&running?'In corso':'In attesa')+
+     '</small></li>';
+ }).join('');
+ const info=state.serverError?'<div class="notice warn">'+ic('wifi',16)+
+   '<span>Core temporaneamente non raggiungibile. Riprovo automaticamente; '+
+   'lo stato è conservato sul Native Agent.</span></div>':'';
+ const fail=failed?'<div class="notice error">'+ic('alert',16)+'<span>'+
+   esc(run==='rolled_back'?'La versione precedente è stata ripristinata.':
+       'Installazione non confermata. Verifica il log root dell’installer.')+
+   ' '+esc(state.runDetails)+'</span></div>':'';
+ const action=button('Verifica release','check-update','ghost',running?'disabled':'')+
+   button('Installa release disponibile','install','primary',
+          running||!state.allowInstall?'disabled':'');
+ return head('RELEASE MANAGEMENT','Aggiornamenti','Stato effettivo dell’installer systemd, anche dopo il riavvio del Core.',action)+
+ '<div class="grid cols3">'+
+ stat('Installata',state.installed,'green','server','Versione verificata')+
+ stat('Disponibile',state.latest,'blue','update','Release del canale attivo')+
+ stat('Stato installer',status,failed?'red':completed?'green':'blue','clock','Host Agent persistente')+
+ '</div>'+section('Avanzamento installazione')+
+ card('<div class="card-top"><div><h2>Installazione</h2><p>Fase attuale: '+
+   esc(state.updatePhase)+' · Aggiornato: '+esc(state.updatedAt||'—')+
+   '</p></div>'+liveBadge(status,failed?'red':completed?'green':running?'orange':'blue')+
+   '</div><div class="split" role="status" aria-live="polite"><strong>'+
+   esc(state.runDetails||status)+'</strong><span class="muted">'+
+   (running?'Fase '+(idx+1)+'/'+LIVE_PHASES.length:status)+'</span></div>'+
+   '<div class="bar" style="margin:11px 0 18px"><i style="width:'+
+     (run==='idle'?0:percent)+'%"></i></div>'+info+fail+
+   '<ol class="timeline">'+timeline+'</ol>'+
+   '<div class="actionrow"><span class="smalltext">Sincronizzazione ogni 3 s · '+
+   'La barra indica le fasi, non i byte scaricati.</span></div>','flat')+
+ (state.updateGuidance?'<div class="notice">'+ic('info',16)+'<span>'+
+   esc(state.updateGuidance)+'</span></div>':'')+
+ section('Impostazioni aggiornamenti')+
+ card('<div class="fields"><label class="field"><span>Canale release</span>'+
+   '<select data-config="KALI_MCP_RELEASE_CHANNEL"><option value="beta"'+
+   (state.cfg.KALI_MCP_RELEASE_CHANNEL==='beta'?' selected':'')+'>Beta</option>'+
+   '<option value="stable"'+(state.cfg.KALI_MCP_RELEASE_CHANNEL==='stable'?' selected':'')+
+   '>Stable</option></select><small>KALI_MCP_RELEASE_CHANNEL</small></label>'+
+   '<label class="field"><span>Intervallo controlli (secondi)</span><input class="textinput"'+
+   ' type="number" min="900" max="86400" data-config="KALI_MCP_UPDATE_CHECK_SECONDS" value="'+
+   esc(state.cfg.KALI_MCP_UPDATE_CHECK_SECONDS||'21600')+
+   '"><small>KALI_MCP_UPDATE_CHECK_SECONDS</small></label></div>'+
+   '<div class="actionrow">'+button('Salva impostazioni','apply-config','primary')+'</div>');
+}
+
+function liveJobTable() {
+ const rows=state.jobs.slice(0,60).map(j=>{
+   const status=String(j.state||'unknown');
+   return '<tr><td><strong>'+esc(j.tool_id||'job')+'</strong><div class="micro mono">'+
+     esc(j.id.slice(0,16))+'</div></td><td>'+esc(j.actor||'—')+'</td><td>'+
+     esc(j.created_at||j.started_at||'—')+'</td><td>'+
+     liveBadge(status,status==='completed'?'green':status==='failed'?'red':'orange')+
+     '</td><td>'+button('Apri','job-detail','small','data-job="'+esc(j.id)+'"')+
+     '</td></tr>';
+ }).join('');
+ return card('<div class="tablewrap"><table><thead><tr><th>Tool</th><th>Client</th>'+
+   '<th>Avvio</th><th>Stato</th><th>Dettagli</th></tr></thead><tbody>'+
+   (rows||'<tr><td colspan="5">Nessun job registrato</td></tr>')+
+   '</tbody></table></div>');
+}
+
+function liveFiles(){
+ return head('TRANSFERS & EXECUTION','File, trasferimenti e job',
+   'Trasferimenti MCP fino a 100 MB; job e audit aggiornati dal server.')+
+   '<div class="grid cols3">'+
+   stat('File massimo','100 MB','blue','file','OpenLink e Base64')+
+   stat('Quota per client','300 MB','blue','folder','16 file contemporanei')+
+   stat('Timeout job',(state.cfg.KALI_MCP_MAX_JOB_SECONDS||'300')+' s',
+     'blue','clock','Massimo consentito')+'</div>'+
+   section('Trasferimento file via MCP')+
+   card('<div class="notice">'+ic('info',16)+
+     '<span>OpenLink usa URL HTTPS firmati e monouso. Base64 usa blocchi da 128 KiB. '+
+     'I file appartengono a ciascun client MCP: questa pagina amministrativa non '+
+     'può accedere ai file di altri client.</span></div>'+
+     '<p class="smalltext">Usa <code>files_upload</code>, <code>files_upload_chunk</code>, '+
+     '<code>files_upload_finish</code>, <code>files_download</code>, '+
+     '<code>files_list</code> e <code>files_delete</code> dal client MCP autenticato.</p>'+
+     '<div class="actionrow"><a class="btn" href="/legacy">Apri strumenti legacy</a></div>')+
+   section('Job MCP','Dati reali, seleziona un job per seguirne stato e output')+
+   liveJobTable()+
+   section('Timeout massimo job')+
+   card('<label class="field"><span>Secondi</span><input type="number" '+
+     'class="textinput" min="5" max="3600" data-config="KALI_MCP_MAX_JOB_SECONDS" value="'+
+     esc(state.cfg.KALI_MCP_MAX_JOB_SECONDS||'300')+'"></label>'+
+     '<div class="actionrow">'+button('Salva timeout','apply-config','primary')+'</div>');
+}
+
+function liveLogs(){
+ const logs=state.events.map(x=>'<div class="auditline"><span>'+esc(x.at)+
+   '</span><span>'+esc(x.actor)+'</span><div><strong>'+esc(x.action)+
+   '</strong><div class="micro">'+esc(x.detail)+'</div></div>'+
+   liveBadge(x.status,x.status==='DENIED'?'red':'green')+'</div>').join('');
+ return head('AUDIT & TELEMETRY','Audit e attività',
+   'Job e operazioni effettive, con esito e dettagli senza JSON grezzo.')+
+   '<div class="grid cols2">'+liveJobTable()+
+   card('<div class="card-top"><div><h2>Audit recente</h2><p>Ultime operazioni registrate.</p>'+
+     '</div>'+liveBadge(state.events.length+' eventi','blue')+'</div>'+
+     (logs||'<p class="muted">Nessun evento recente</p>'))+'</div>';
+}
+
+function liveSettings(){
+ const matches=state.inventory.filter(x=>(x.name+' '+x.group+' '+x.description)
+     .toLowerCase().includes(state.search.toLowerCase()));
+ const editable=state.inventory.filter(x=>x.editable);
+ const rows=matches.map(x=>'<tr><td><strong class="mono">'+esc(x.name)+
+   '</strong><div class="micro">'+esc(x.description||'')+'</div></td><td>'+
+   liveBadge(x.group,'blue')+'</td><td><code>'+esc(x.value||'(vuoto)')+
+   '</code></td><td>'+ (x.editable?
+      button('Modifica','edit-setting','small','data-key="'+esc(x.name)+'"'):
+      '<span class="muted">Solo lettura</span>')+'</td></tr>').join('');
+ return head('CONFIGURATION INVENTORY','Tutte le variabili',
+   'Inventario del Native Agent; credenziali mascherate e chiavi interne protette.')+
+   card('<div class="split"><div class="grow"><label class="field"><span>Cerca una variabile'+
+      ' KALI_MCP_*</span><input id="settingSearch" class="textinput" value="'+esc(state.search)+
+      '" placeholder="CIDRS, ROOT, PORT, UPDATE" autofocus></label></div>'+
+      '<span id="settingsCount">'+liveBadge(matches.length+'/'+state.inventory.length+
+      ' variabili','blue')+'</span></div>'+
+      '<div class="tablewrap" style="margin-top:15px"><table><thead><tr><th>Variabile</th>'+
+      '<th>Gruppo</th><th>Valore</th><th>Azione</th></tr></thead><tbody>'+
+      (rows||'<tr><td colspan="4">Nessuna variabile corrispondente</td></tr>')+
+      '</tbody></table></div>')+
+   '<div class="notice">'+ic('lock',17)+'<span>'+editable.length+
+      ' variabili modificabili con password superuser. Le altre sono gestite '+
+      'dall’installer o tramite flussi dedicati; i segreti non sono visibili.</span></div>';
+}
+
+function liveGuide(){
+ return head('DOCUMENTATION','Guida operativa',
+   'Quattro flussi amministrativi e le relative protezioni.')+
+   ['Aggiornamenti','Scope autorizzato','Client e token','Variabili e permessi'].map((x,i)=>
+     card('<div class="setting-row"><span class="number">'+(i+1)+
+       '</span><div class="grow"><div class="label">'+x+'</div><p>'+
+       ['Verifica la release, conferma e segui il supervisore fino all’healthcheck reale.',
+        'La blacklist prevale; la shell host generica non è protetta dal filtro CIDR degli adapter.',
+        'Autorizza prima CORS, poi crea un token o OAuth e verifica la connessione.',
+        'Controlla il ceiling, usa il toggle runtime e conferma con password superuser.'][i]+
+       '</p></div>'+button('Apri','scenario','small','data-value="'+
+       ['updates','scope','cors','settings'][i]+'")+'</div>')).join('')+
+   section('Versione classica')+
+   card('<p>La precedente dashboard rimane disponibile per diagnosi e rollback UX.</p>'+
+        '<a href="/legacy" class="btn">Apri dashboard classica</a>');
+}
+views.overview=liveOverview; views.updates=liveUpdates; views.files=liveFiles;
+views.logs=liveLogs; views.settings=liveSettings; views.lab=liveGuide;
+
+function renderLoading(){
+ document.getElementById('content').innerHTML=head('CONNESSIONE',
+   'Caricamento Control Center','Connessione autenticata all’istanza Kali MCP…')+
+   card('<p class="muted">Recupero status, configurazione, job e stato aggiornamenti.</p>');
+}
+function markConnection(online){
+ const node=document.querySelector('.top .sync');
+ if(!node)return;
+ node.innerHTML='<span class="pulse"></span> '+(online?'DATI LIVE':'RICONNESSIONE');
+ node.style.color=online?'var(--good)':'var(--warn)';
+}
+function applyLive(data){
+ lastSnapshot=data; state.hasSnapshot=true; state.serverError='';
+ state.coreOnline=true; state.agentOnline=Boolean(data.agent?.online);
+ state.installed=String(data.updates?.installed||data.core?.version||'unknown');
+ state.latest=String(data.updates?.latest||'Non verificata');
+ state.allowInstall=data.updates?.install_allowed===true;
+ state.updateGuidance=String(data.updates?.guidance||'');
+ state.updateError=String(data.updates?.error||'');
+ const run=data.updates?.run||{};
+ state.updateRun=String(run.state||'idle');
+ state.updatePhase=String(run.phase||'scheduled');
+ state.updateIndex=LIVE_PHASES.indexOf(state.updatePhase);
+ state.updatedAt=run.updated_at||null; state.runDetails=String(run.detail||'');
+ state.cfg={};
+ state.inventory=Array.isArray(data.fields)?data.fields:[];
+ for(const item of state.inventory)if(item.editable)state.cfg[item.name]=String(item.value??'');
+ state.runtime={};
+ for(const id of runtime)state.runtime[id[0]]=Boolean(data.runtime?.[id[0]]?.enabled);
+ if(!state.scopeDirty){
+   state.mode=state.cfg.KALI_MCP_ALLOW_ALL_TARGETS==='true'?'all':'allowlist';
+   state.draftAllowed=state.cfg.KALI_MCP_ALLOWED_CIDRS||'';
+   state.draftDenied=state.cfg.KALI_MCP_DENIED_CIDRS||'';
+ }
+ state.origins=Array.isArray(data.origins?.configured)?data.origins.configured:[];
+ state.activeOrigins=Array.isArray(data.origins?.active)?data.origins.active:[];
+ state.api=Array.isArray(data.tokens)?data.tokens.map(x=>({...x,
+   expires:x.expires?new Date(x.expires*1000).toLocaleDateString('it-IT'):'—'})):[];
+ state.oauth=Array.isArray(data.oauth)?data.oauth:[];
+ state.jobs=Array.isArray(data.jobs)?data.jobs:[];
+ state.events=Array.isArray(data.audit)?data.audit.map(x=>({
+   at:x.at||'',actor:x.actor||'',action:x.action||'',detail:x.detail||'',
+   status:String(x.decision||'').toLowerCase()==='deny'?'DENIED':'OK'})):[];
+ const tag=document.activeElement?.tagName;
+ markConnection(true);
+ if(!['INPUT','SELECT','TEXTAREA'].includes(tag) &&
+     !document.getElementById('overlay').children.length)render();
+ else side();
+}
+async function refreshLive(){
+ try{
+   const ctrl=new AbortController();
+   const t=setTimeout(()=>ctrl.abort(),8000);
+   let response;
+   try {response=await fetch('/api/v1/ui/snapshot',{
+       credentials:'same-origin',cache:'no-store',signal:ctrl.signal,
+       headers:{Accept:'application/json'}});}
+   finally{clearTimeout(t);}
+   if(response.status===401){window.location.assign('/login?reason=session-expired&next=/');return;}
+   if(!response.ok)throw new Error('HTTP '+response.status);
+   const json=await response.json(); if(!json.ok)throw Error('Snapshot non disponibile');
+   applyLive(json);
+   if(liveJobId)await refreshJobDetails(liveJobId,false);
+ }catch(err){
+   state.serverError='Riconnessione: '+String(err.message||'server non raggiungibile');
+   state.coreOnline=false;markConnection(false);
+   if(!state.hasSnapshot)renderLoading();
+ }
+ clearTimeout(liveRefreshTimer);
+ liveRefreshTimer=setTimeout(refreshLive,state.serverError?6000:3000);
+}
+function startLive(){
+ const params=new URLSearchParams(location.search);
+ const section=params.get('page');
+ if(['overview','updates','scope','permissions','clients','cors','files','logs','settings','lab'].includes(section))
+   state.page=section;
+ liveJobId=/^[0-9a-f]{32}$/.test(params.get('job')||'')?params.get('job'):null;
+ renderLoading();
+ refreshLive();
+}
+function getFormError(source){
+ const doc=new DOMParser().parseFromString(source,'text/html');
+ const blocks=[...doc.querySelectorAll('h2,p')].map(n=>n.textContent.trim()).filter(Boolean);
+ return (blocks.join(' — ')||'La richiesta è stata rifiutata').slice(0,380);
+}
+async function postLive(path, form){
+ const fields=new URLSearchParams({...form,csrf:CSRF});
+ try{
+   const response=await fetch(path,{method:'POST',credentials:'same-origin',
+     headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8',
+              Accept:'text/html'},body:fields,redirect:'follow',cache:'no-store'});
+   if(new URL(response.url).pathname==='/login'||response.status===401){
+     window.location.assign('/login?reason=session-expired&next=/');
+     return null;
+   }
+   const text=await response.text();
+   if(!response.ok){
+     const msg=getFormError(text);
+     toast(msg,'bad');
+     return null;
+   }
+   const htmlDoc=new DOMParser().parseFromString(text,'text/html');
+   const token=htmlDoc.querySelector('textarea[readonly]');
+   if(token && token.value.startsWith('kmp_')){
+     state.tokenReveal=token.value;
+     state.page='clients';
+     toast('Token creato: copialo ora, non sarà recuperabile.');
+   }else if(path.endsWith('/check') && path.includes('browser-origins')){
+     const details=getFormError(text);
+     toast(details.length>260?details.slice(0,260):details);
+     const result=document.getElementById('corsResult');
+     if(result)result.textContent=details;
+   }else{
+     toast('Richiesta accettata. Verifico lo stato reale del server.');
+   }
+   await refreshLive();
+   return response;
+ }catch(err){
+   toast('Connessione interrotta. Verifica lo stato prima di riprovare: '+
+     String(err.message||'server offline'),'bad');
+   return null;
+ }
+}
+function promptAdmin(title,description,action,phrase){
+ livePending={action,phrase:phrase||''};
+ document.getElementById('overlay').innerHTML='<div class="modalcover">'+
+   '<div class="modal" role="dialog" aria-modal="true" aria-label="'+esc(title)+'">'+
+   '<h2>'+esc(title)+'</h2><p>'+esc(description)+'</p>'+
+   (phrase?'<label class="field"><span>Scrivi '+esc(phrase)+
+      '</span><input class="textinput" id="liveConfirm" autocomplete="off" spellcheck="false"></label>':'')+
+   '<label class="field" style="margin-top:12px"><span>Password superuser</span>'+
+   '<input class="textinput" type="password" id="livePassword" autocomplete="current-password"></label>'+
+   '<p class="micro">La password viene inviata soltanto al backend protetto. Nessuna azione '+
+   'viene ripetuta automaticamente dopo un nuovo login.</p><div class="modal-foot">'+
+   button('Annulla','modal-cancel')+button('Conferma','live-submit','primary')+
+   '</div></div></div>';
+ document.getElementById('livePassword')?.focus();
+}
+function liveAction(action,el){
+ const value=el?.dataset.value;
+ if(action==='live-submit'){
+   if(!livePending)return;
+   const password=document.getElementById('livePassword')?.value||'';
+   const confirmation=document.getElementById('liveConfirm')?.value||'';
+   if(!password)return toast('Inserisci la password del superuser.','bad');
+   if(livePending.phrase && confirmation!==livePending.phrase)
+     return toast('La conferma testuale non corrisponde.','bad');
+   const done=livePending.action;
+   livePending=null;closeModal();void done(password,confirmation);return;
+ }
+ if(action==='fail-next'||action==='reset-demo'||action==='upload'){
+   return toast('Questa operazione di simulazione non è disponibile nella produzione.','bad');
+ }
+ if(action==='check-update')return void postLive('/api/v1/updates/check',{});
+ if(action==='install'){
+   if(!state.allowInstall)return toast(state.updateGuidance||'Installazione non autorizzata','bad');
+   return modal('Conferma aggiornamento',
+      'Installer systemd e Core verranno aggiornati davvero. Il servizio potrebbe riavviarsi. '+
+      'La timeline leggerà lo stato persistente, senza confondere il job di scheduling con il completamento.',
+      'Installa release','modal-confirm',
+      ()=>{void postLive('/api/v1/updates/install',{confirm_update:'yes'});});
+ }
+ if(action==='save-scope'){
+   state.draftAllowed=document.getElementById('allowedCidrs')?.value||'';
+   state.draftDenied=document.getElementById('deniedCidrs')?.value||'';
+   const allowed=state.draftAllowed.replace(/[\n;]+/g,',').trim();
+   const denied=state.draftDenied.replace(/[\n;]+/g,',').trim();
+   const all=state.mode==='all';
+   if(all&&!denied)return toast('Allow all richiede una blacklist non vuota.','bad');
+   if(all && document.getElementById('allowConfirm')?.value!=='ALLOW ALL')
+     return toast('Inserisci ALLOW ALL nel campo di conferma.','bad');
+   promptAdmin('Applica Authorized Scope',
+     'Blacklist e allowlist vengono verificate dal Native Agent. La modifica riavvia il Core e mantiene un rollback.',
+     async(password)=>{
+       const answer=await postLive('/settings/deployment',{
+         section:'scope',password,
+         KALI_MCP_ALLOW_ALL_TARGETS:all?'true':'false',
+         KALI_MCP_ALLOWED_CIDRS:allowed,
+         KALI_MCP_DENIED_CIDRS:denied,confirm:all?'ALLOW ALL':''});
+       if(answer)state.scopeDirty=false;
+     });return;
+ }
+ if(action==='ceiling'){
+   const key=value;
+   const current=state.cfg[key]==='true';
+   const target=current?'false':'true';
+   return promptAdmin('Modifica limite di deployment',
+     key+' → '+target+'. L’operazione riavvia il Core e il Native Agent.',
+     password=>postLive('/settings/deployment',{
+       section:'variable',key,value:target,password,
+       confirm:key.includes('ROOT')&&target==='true'?'ENABLE ROOT':''}),
+     key.includes('ROOT')&&target==='true'?'ENABLE ROOT':'');
+ }
+ if(action==='runtime'){
+   const id=value, cap=runtime.find(x=>x[0]===id);
+   if(!cap||state.cfg[cap[3]]!=='true')
+     return toast('Il ceiling non consente questo permesso.','bad');
+   const enabled=!state.runtime[id];
+   return promptAdmin('Permesso runtime: '+id,
+     'Conferma '+(enabled?'l’attivazione':'la disattivazione')+' del permesso.',
+     password=>postLive('/api/v1/settings',{
+       feature:id,enabled:enabled?'true':'false',superuser_password:password,
+       disclaimer:id==='host_root'&&enabled?'yes':''}),
+     id==='host_root'&&enabled?'ENABLE ROOT':'');
+ }
+ if(action==='new-token'){
+   document.getElementById('overlay').innerHTML='<div class="modalcover"><div class="modal">'+
+     '<h2>Nuovo API Token MCP</h2><label class="field">Nome client'+
+     '<input class="textinput" id="liveTokenName" maxlength="80" required></label>'+
+     '<label class="field">Durata (giorni)<input type="number" class="textinput" '+
+     'id="liveTokenDays" value="30" min="1" max="90"></label>'+
+     '<label class="field">Tool consentiti (opzionale, separati da virgola)'+
+     '<input class="textinput" id="liveTokenTools" placeholder="system_status,tools_search"></label>'+
+     '<label class="field">Origine CORS autorizzata (opzionale)'+
+     '<input class="textinput" id="liveTokenOrigin" placeholder="https://llm.example.com"></label>'+
+     '<label class="field">Password superuser'+
+     '<input class="textinput" id="liveTokenPassword" type="password"></label>'+
+     '<div class="modal-foot">'+button('Annulla','modal-cancel')+
+     button('Crea token','live-create-token','primary')+'</div></div></div>';return;
+ }
+ if(action==='live-create-token'){
+   const form={name:document.getElementById('liveTokenName')?.value||'',
+     days:document.getElementById('liveTokenDays')?.value||'30',
+     allowed_tools:document.getElementById('liveTokenTools')?.value||'',
+     browser_origin:document.getElementById('liveTokenOrigin')?.value||'',
+     password:document.getElementById('liveTokenPassword')?.value||''};
+   if(!form.name||!form.password)return toast('Nome e password obbligatori.','bad');
+   closeModal();return void postLive('/api/v1/api-tokens/create',form);
+ }
+ if(action==='revoke-token'||action==='rotate-token'){
+   const token=state.api[Number(el?.dataset.index)];
+   if(!token)return toast('Token non trovato.','bad');
+   const rotating=action==='rotate-token';
+   return promptAdmin((rotating?'Ruota':'Revoca')+' token API',
+     token.name+' · La vecchia credenziale sarà revocata.',
+     password=>postLive('/api/v1/api-tokens/'+(rotating?'rotate':'revoke'),{
+       token_id:token.id,password, ...(rotating?{days:'30'}:{})}));
+ }
+ if(action==='revoke-oauth'){
+   const client=state.oauth[Number(el?.dataset.index)];
+   if(!client)return;
+   return modal('Revoca client OAuth',client.name+' · Tutti i suoi token saranno revocati.',
+     'Revoca','modal-confirm',()=>void postLive('/api/v1/clients/revoke',{client_id:client.id}));
+ }
+ if(action==='add-origin'){
+   const origin=document.getElementById('originField')?.value.trim()||'';
+   if(!/^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(origin))
+     return toast('Inserisci una origin HTTPS esatta senza path o wildcard.','bad');
+   return promptAdmin('Autorizza origine CORS',origin,
+     password=>postLive('/api/v1/browser-origins',{action:'add',origin,password}));
+ }
+ if(action==='remove-origin'){
+   const origin=state.origins[Number(el?.dataset.index)];if(!origin)return;
+   return promptAdmin('Rimuovi origine CORS',origin,
+     password=>postLive('/api/v1/browser-origins',{action:'remove',origin,password}));
+ }
+ if(action==='test-cors'){
+   const origin=document.getElementById('corsProbe')?.value||'';
+   if(!origin)return toast('Seleziona una origine da verificare.','bad');
+   return void postLive('/api/v1/browser-origins/check',{
+     origin,bearer:document.getElementById('corsBearer')?.value||''});
+ }
+ if(action==='edit-setting'){
+   const field=state.inventory.find(x=>x.name===el?.dataset.key&&x.editable);
+   if(!field)return toast('Variabile gestita dall’installer o non modificabile.','bad');
+   if(field.group==='Scope'){goto('scope');return;}
+   const choice=field.type==='bool'?
+     '<select class="textinput" id="liveSettingVal"><option value="false"'+
+     (field.value==='false'?' selected':'')+'>false</option><option value="true"'+
+     (field.value==='true'?' selected':'')+'>true</option></select>':
+     '<input class="textinput" id="liveSettingVal" value="'+esc(field.value)+'">';
+   document.getElementById('overlay').innerHTML='<div class="modalcover"><div class="modal">'+
+     '<h2>'+esc(field.name)+'</h2><p>'+esc(field.description)+'</p>'+
+     '<label class="field">Nuovo valore'+choice+'</label>'+
+     '<label class="field">Conferma superuser<input class="textinput" '+
+     'type="password" id="liveEditPassword"></label>'+
+     (field.name.includes('ROOT')?
+      '<label class="field">Conferma root<input class="textinput" id="liveEditConfirm" '+
+      'placeholder="ENABLE ROOT"></label>':'')+
+     '<div class="modal-foot">'+button('Annulla','modal-cancel')+
+     button('Applica','edit-confirm','primary','data-key="'+esc(field.name)+'"')+
+     '</div></div></div>';return;
+ }
+ if(action==='edit-confirm'){
+   const key=el?.dataset.key, val=document.getElementById('liveSettingVal')?.value||'';
+   const password=document.getElementById('liveEditPassword')?.value||'';
+   const confirm=document.getElementById('liveEditConfirm')?.value||'';
+   if(!password)return toast('Conferma password obbligatoria.','bad');
+   if(key.includes('ROOT')&&val==='true'&&confirm!=='ENABLE ROOT')
+     return toast('Scrivi ENABLE ROOT per abilitare root.','bad');
+   closeModal();return void postLive('/settings/deployment',
+     {section:'variable',key,value:val,password,confirm});
+ }
+ if(action==='apply-config'){
+   const changes=[...document.querySelectorAll('[data-config]')].filter(x=>
+     state.cfg[x.dataset.config]!==x.value).map(x=>[x.dataset.config,x.value]);
+   if(!changes.length)return toast('Nessuna modifica da salvare.');
+   if(changes.length>3)return toast('Massimo tre parametri per operazione.','bad');
+   return promptAdmin('Applica configurazione',
+     changes.map(x=>x[0]+' → '+x[1]).join(' · ')+
+       '. Il Native Agent verificherà i valori e gestirà il riavvio.',
+     password=>postLive('/settings/deployment',{
+       section:'batch',changes:JSON.stringify(Object.fromEntries(changes)),password}));
+ }
+ if(action==='job-detail'){
+   const id=el?.dataset.job;
+   if(!/^[0-9a-f]{32}$/.test(id||''))return toast('ID job non valido.','bad');
+   liveJobId=id;return void refreshJobDetails(id,true);
+ }
+ if(action==='error-demo')return goto('lab');
+ if(action==='logout')return void postLive('/logout',{});
+}
+async function refreshJobDetails(id,open){
+ try{
+   const res=await fetch('/api/v1/jobs/'+encodeURIComponent(id),{
+     credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+   if(res.status===401){window.location.assign('/login');return;}
+   if(!res.ok)throw Error('Job non trovato (HTTP '+res.status+')');
+   const job=await res.json();if(job.error)throw Error(job.error);
+   const outcome=job.result||{};
+   const text=(outcome.stdout||outcome.stderr||outcome.error||'').slice(0,10000);
+   const html='<h2>'+esc(job.tool_id||'Job')+'</h2>'+
+     '<p>ID: <code>'+esc(job.id)+'</code></p>'+
+     '<div class="notice">'+esc(job.state||'—')+' · '+esc(job.exit_code??'—')+'</div>'+
+     '<pre style="max-height:340px;overflow:auto;white-space:pre-wrap">'+esc(text||'Nessun output disponibile')+'</pre>'+
+     '<div class="modal-foot">'+button('Chiudi','modal-cancel')+'</div>';
+   if(open||document.getElementById('overlay').dataset.jobId===id){
+     document.getElementById('overlay').dataset.jobId=id;
+     document.getElementById('overlay').innerHTML='<div class="modalcover"><div class="modal" '+
+       'role="dialog" aria-modal="true">'+html+'</div></div>';
+   }
+ }catch(err){if(open)toast(String(err.message||err),'bad');}
+}
+
+function actionClick(a,el){if(LIVE_ACTIONS.has(a)){liveAction(a,el);return;}const v=el?.dataset.value;switch(a){case'nav':return goto(v);case'goto-updates':return goto('updates');case'goto-scope':return goto('scope');case'goto-permissions':return goto('permissions');case'goto-clients':return goto('clients');case'goto-logs':return goto('logs');case'mobile':document.getElementById('side').classList.toggle('open');return;case'theme':state.theme=v;render();return;case'help':return goto('lab');case'check-update':state.checked=true;log('webui','updates.check','Release demo disponibile');toast('Controllo simulato: release di esempio disponibile.');return;case'install':return modal('Avvia aggiornamento?','Questa è una <strong>simulazione</strong>. Il job rimarrà visibile durante riavvio e riconnessione, senza alcuna operazione sul Raspberry.','Avvia demo','modal-confirm',startUpdate);case'fail-next':state.failNext=true;return toast('Nel prossimo tentativo verrà simulato un healthcheck fallito.');case'mode':state.draftAllowed=document.getElementById('allowedCidrs')?.value??state.draftAllowed;state.draftDenied=document.getElementById('deniedCidrs')?.value??state.draftDenied;state.scopeDirty=true;state.mode=v;return render();case'probe-one':state.testIP='192.168.0.1';document.getElementById('probeIP').value=state.testIP;document.getElementById('probeResult').innerHTML=scopeResult(state.testIP);return;case'probe-denied':state.testIP='192.168.137.42';document.getElementById('probeIP').value=state.testIP;document.getElementById('probeResult').innerHTML=scopeResult(state.testIP);return;case'save-scope':return saveScope();case'scope-focus':document.getElementById('probeIP')?.focus();return;case'ceiling':{let key=v;let current=state.cfg[key]==='true';let risky=/ROOT|HOST_EXEC|NETWORK_CHANGES|PACKAGE_INSTALL/.test(key);return modal(risky?'Modifica di sicurezza critica':'Conferma impostazione',`<code>${esc(key)}</code><br>Nuovo valore: <strong>${current?'false':'true'}</strong>. Nella WebUI vera è obbligatoria la password superuser.`, 'Conferma simulata','modal-confirm',()=>applyValue(key,current?'false':'true'))}case'runtime':{let id=v,ceiling=runtime.find(x=>x[0]===id)?.[3];if(state.cfg[ceiling]!=='true')return toast('Prima devi autorizzare il limite di deployment.','bad');return modal('Modifica abilitazione runtime',`Stai per ${state.runtime[id]?'disabilitare':'abilitare'} <strong>${esc(id)}</strong> (demo).`, 'Conferma simulata','modal-confirm',()=>{state.runtime[id]=!state.runtime[id];log('superuser','capability.toggle',id);render()})}case'new-token':return newToken();case'create-token':{const name=document.getElementById('tokenName')?.value||'Demo';state.api.unshift({name,id:'tok_demo_'+Math.random().toString(36).slice(2,6),expires:'2026-12-08',status:'Attivo'});state.tokenReveal='kmp_demo_NOT_REAL_'+Math.random().toString(36).slice(2,17);log('superuser','token.create',name);closeModal();toast('Token demo creato e mostrato una sola volta.');return render()}case'revoke-token':{const i=+el.dataset.index;return modal('Revoca API Token',`Revocare <strong>${esc(state.api[i]?.name)}</strong>? Questa azione non si può annullare nella UI reale.`, 'Revoca (demo)','modal-confirm',()=>{state.api[i].status='Revocato';log('superuser','token.revoke',state.api[i].id);render()})}case'rotate-token':{const i=+el.dataset.index;return modal('Ruota API Token',`Ruotare <strong>${esc(state.api[i]?.name)}</strong>? Il vecchio token smetterà di funzionare.`, 'Ruota (demo)','modal-confirm',()=>{state.tokenReveal='kmp_demo_ROTATED_'+Math.random().toString(36).slice(2,13);log('superuser','token.rotate',state.api[i].id);render()})}case'revoke-oauth':{const i=+el.dataset.index;return modal('Revoca client OAuth',`Revocare <strong>${esc(state.oauth[i]?.name)}</strong> e i relativi grant?`, 'Revoca (demo)','modal-confirm',()=>{state.oauth[i].status='Revocato';log('superuser','oauth.revoke',state.oauth[i].id);render()})}case'add-origin':return addOrigin();case'focus-origin':return document.getElementById('originField')?.focus();case'remove-origin':{const i=+el.dataset.index;return modal('Rimuovi origine CORS',`Rimuovere <code>${esc(state.origins[i])}</code> dalla allowlist?`, 'Rimuovi (demo)','modal-confirm',()=>{state.origins.splice(i,1);render();toast('Origin rimossa nella simulazione.');log('superuser','cors.origin.remove','')})}case'test-cors':{const url=document.getElementById('corsProbe')?.value;const area=document.getElementById('corsResult');if(!url)return toast('Seleziona un’origine da verificare.','bad');area.innerHTML=`<div class="notice success">${ic('check',17)}<div><strong>Simulazione: OPTIONS 204, Host OK, initialize OK, tools/list OK</strong><div class="smalltext">Il test reale richiede richieste HTTP e Bearer al backend, qui non avviene.</div></div></div>`;state.tests.cors=true;return toast('Diagnostica demo completata.')}case'focus-file':return document.getElementById('demoFile')?.focus();case'upload':{const f=document.getElementById('demoFile')?.files?.[0];if(!f)return toast('Seleziona un file locale, senza inviarlo.','bad');if(f.size>100000000)return toast('Il limite per singolo file è 100 MB.','bad');const mode=document.getElementById('fileMode').value;state.files.unshift({name:f.name,size:f.size,mode:mode==='openlink'?'OpenLink':'Base64',status:'Completato'});log('mcp:demo','files.upload',f.name);toast('Upload simulato: solo metadati, nessun byte trasmesso.');return render()}case'job-detail':return modal('Dettagli job · demo',`<code>${esc(el.dataset.job)}</code><br><br>Qui il prodotto reale dovrebbe leggere <code>/api/v1/jobs/{id}</code> e gli eventi dell'installer, mostrare progressi e aggiornarsi anche dopo il riavvio del Core.`, 'Chiudi','modal-cancel');case'error-demo':return modal('Impossibile applicare la modifica','La sessione amministrativa è scaduta. <strong>Nessun cambiamento è stato salvato.</strong><br><br>Accedi nuovamente e ripeti l’azione. Questo messaggio sostituisce il JSON grezzo.','Ho capito','modal-cancel');case'edit-setting':return confirmEdit(el.dataset.key);case'edit-confirm':{const key=el.dataset.key,val=document.getElementById('editVal')?.value;closeModal();state.tests.settings=true;return applyValue(key,val)}case'apply-config':{const items=[...document.querySelectorAll('[data-config]')];if(!items.length)return;const edits=items.map(e=>[e.dataset.config,e.value]).filter(([k,val])=>state.cfg[k]!==val);if(!edits.length)return toast('Nessuna modifica da applicare.');return modal('Salva configurazione','Applica '+edits.length+' impostazione/i nella sola simulazione? In produzione è necessaria la conferma superuser.','Applica (demo)','modal-confirm',()=>{edits.forEach(([k,v])=>state.cfg[k]=v);log('superuser','deployment.batch.update',edits.map(x=>x[0]).join(', '));toast('Modifiche applicate nella simulazione.');render()})}case'scenario':return goto(v);case'reset-demo':return modal('Reimposta demo','Le modifiche simulated, il job e i risultati del test verranno azzerati ricaricando lo staging.','Reimposta','modal-confirm',()=>location.reload());case'modal-cancel':return closeModal();case'modal-confirm':{const fn=window.pendingConfirm;closeModal();if(fn)fn();return}default:return}}
+document.addEventListener('click',event=>{const btn=event.target.closest('[data-action]');if(btn){event.preventDefault();actionClick(btn.dataset.action,btn)}});document.addEventListener('input',event=>{if(event.target.id==='allowedCidrs'||event.target.id==='deniedCidrs'){state.draftAllowed=document.getElementById('allowedCidrs').value;state.draftDenied=document.getElementById('deniedCidrs').value;state.scopeDirty=true;document.getElementById('probeResult').innerHTML=scopeResult(state.testIP)}else if(event.target.id==='probeIP'){state.testIP=event.target.value;document.getElementById('probeResult').innerHTML=scopeResult(state.testIP)}else if(event.target.id==='settingSearch'){const pos=event.target.selectionStart;state.search=event.target.value;const list=document.querySelector('tbody');if(list){const matches=configs.filter(x=>[x[0],x[1],x[4]].join(' ').toLowerCase().includes(state.search.toLowerCase()));list.innerHTML=matches.map(([key,group,type,def,desc])=>`<tr><td><strong class="mono">${esc(key)}</strong><div class="micro">${esc(desc)}</div></td><td>${badge(group,'blue')}</td><td><code>${esc(state.cfg[key]||'(vuoto)')}</code></td><td>${button('Modifica','edit-setting','small',`data-key="${key}"`)}</td></tr>`).join('')}}});document.addEventListener('keydown',e=>{if(e.key==='Escape'&&document.getElementById('overlay').children.length)closeModal()});startLive();
 })();
