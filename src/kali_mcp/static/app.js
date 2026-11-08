@@ -19,7 +19,12 @@
         credentials: "same-origin",
         cache: "no-store"
       });
-      if (!response.ok) throw new Error("Status unavailable; sign in again if needed");
+      if (response.status === 401) {
+        // Re-authentication is required; never replay any POST/setting toggle.
+        window.location.replace("/login?reason=session-expired&next=/");
+        return;
+      }
+      if (!response.ok) throw new Error("Status temporarily unavailable; reload to retry");
       const data = await response.json();
       status.textContent = "Broker: " + data.broker + " • Jobs: " + data.jobs.length;
 
