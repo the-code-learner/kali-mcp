@@ -86,6 +86,8 @@ def test_invalid_cidrs_and_guardrails_rejected():
         validate_change(current, {"KALI_MCP_SUPERUSER_FILE": "/tmp/compromised"})
     with pytest.raises(ValueError):
         validate_change(current, {"KALI_MCP_ALLOWED_CIDRS": "0.0.0.0/0\nEVIL=yes"})
+    with pytest.raises(ValueError, match="Allow all"):
+        validate_change(current, {"KALI_MCP_ALLOWED_CIDRS": "0.0.0.0/0"})
     with pytest.raises(ValueError, match="Host Exec"):
         validate_change(current, {"KALI_MCP_ALLOW_HOST_ROOT": "true"})
     with pytest.raises(ValueError):
