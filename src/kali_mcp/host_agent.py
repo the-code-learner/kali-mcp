@@ -23,6 +23,8 @@ from collections import deque
 from uuid import uuid4
 
 from .releases import query_releases, select_release
+from .browser_origins import parse_browser_origins, validate_browser_origin
+from .cli_config import parse_env
 import threading
 
 from .broker import Broker, BrokerDenied, Handler, LocalServer
@@ -154,6 +156,53 @@ class NativeAgent(Broker):
                             self._close_session(session_id, session)
             self.store.audit("admin", "settings_set", "allow", key)
             return {"ok": True, "settings": self.store.settings()}
+        if op == "browser_origins_status":
+            configured = parse_browser_origins(
+                parse_env(Path("/etc/kali-mcp/stack.env")).get("KALI_MCP_BROWSER_ORIGINS", ""))
+            status_path = Path("/var/lib/kali-mcp/browser-origins-status.json")
+            progress = {"state": "unknown"}
+            try:
+                if status_path.is_file() and not status_path.is_symlink():
+                    progress = json.loads(status_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                progress = {"state": "unavailable"}
+            return {"ok": True, "configured": list(configured), "deployment": progress}
+        if op == "browser_origins_update":
+            # This is a narrowly scoped administrative configuration operation;
+            # it never enables any host/root execution or MCP capability.
+            self._verify_superuser(data.get("superuser_name"),
+                                   data.get("superuser_password"))
+            action = data.get("action")
+            if action not in {"add", "remove"}:
+                raise BrokerDenied("Invalid browser-origin action")
+            try:
+                origin = validate_browser_origin(data.get("origin"))
+                current = list(parse_browser_origins(
+                    parse_env(Path("/etc/kali-mcp/stack.env")).get("KALI_MCP_BROWSER_ORIGINS", "")))
+                if action == "add":
+                    if origin not in current:
+                        current.append(origin)
+                elif origin in current:
+                    current.remove(origin)
+                desired = parse_browser_origins(",".join(current))
+            except (ValueError, OSError) as exc:
+                raise BrokerDenied("Invalid browser-origin configuration: " + str(exc)[:160]) from exc
+            if (action == "add" and origin in current and
+                    desired == tuple(parse_browser_origins(
+                        parse_env(Path("/etc/kali-mcp/stack.env")).get("KALI_MCP_BROWSER_ORIGINS", "")))):
+                return {"ok": True, "unchanged": True, "configured": list(desired)}
+            unit = "kali-mcp-origins-" + uuid4().hex[:12]
+            argv = ["systemd-run", "--collect", "--on-active=3s",
+                    "--unit=" + unit, "/usr/bin/python3",
+                    "/opt/kali-mcp/current/scripts/manage_browser_origins.py",
+                    "--origins", ",".join(desired)]
+            result = self._run(argv, timeout=20)
+            if result.get("exit_code") != 0:
+                raise BrokerDenied("Could not schedule the Core configuration change")
+            self.store.audit("admin", "browser_origins.update", "allow",
+                             action + ":" + origin)
+            return {"ok": True, "scheduled": True, "configured": list(desired),
+                    "unit": unit}
         if op == "updates_install":
             self.require("mcp_updates", "allow_mcp_updates")
             requested = str(data.get("tag", ""))
