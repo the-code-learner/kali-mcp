@@ -223,6 +223,29 @@ def api_token_revoke(token_id: str) -> None:
         _restore_core_sqlite_owner()
 
 
+def api_token_rotate(token_id: str, days: int = 30) -> None:
+    if not sys.stdout.isatty():
+        raise ValueError("Rotate API tokens in an interactive terminal")
+    if input("Type ROTATE to revoke the prior token immediately: ").strip() != "ROTATE":
+        print("Cancelled")
+        return
+    from .cli_config import parse_env
+    config = parse_env(ETC / "stack.env")
+    resource = config.get("KALI_MCP_PUBLIC_URL", "").rstrip("/") + "/mcp"
+    credential = read_record(ETC / "superuser.json")
+    store = data_store()
+    try:
+        new_id, token = store.rotate_api_token(
+            token_id, resource, record_fingerprint(credential), days=days,
+            actor="cli:" + AUTH_USER)
+        print("Prior token revoked. Copy this new secret now (shown ONCE).")
+        print("New token ID:", new_id)
+        print("Bearer:", token)
+    finally:
+        store.close()
+        _restore_core_sqlite_owner()
+
+
 def show_audit(limit: int = 15) -> None:
     store = data_store()
     try:
@@ -485,13 +508,15 @@ def dashboard() -> None:
             access_menu()
         elif option == "t":
             api_tokens_list()
-            action = input("Create / Revoke / Back [c/r/b]: ").strip().lower()
+            action = input("Create / Revoke / Rotate / Back [c/r/o/b]: ").strip().lower()
             if action == "c":
                 api_token_create(input("Client name: ").strip(),
                                  int(input("Expires in days (1-90) [30]: ").strip() or "30"),
                                  input("Allowed MCP tool names, comma-separated (blank=all): "))
             elif action == "r":
                 api_token_revoke(input("Token ID: ").strip())
+            elif action == "o":
+                api_token_rotate(input("Token ID: ").strip())
         elif option == "g":
             caps = broker("settings_get")["settings"]
             print(caps)
@@ -522,6 +547,9 @@ def main() -> None:
     create.add_argument("--tools", default="", help="Comma-separated MCP tool allowlist")
     revoke_api = sub.add_parser("api-token-revoke")
     revoke_api.add_argument("token_id")
+    rotate_api = sub.add_parser("api-token-rotate")
+    rotate_api.add_argument("token_id")
+    rotate_api.add_argument("--days", type=int, default=30)
     revoke = sub.add_parser("client-revoke")
     revoke.add_argument("client_id")
     sub.add_parser("access")
@@ -554,6 +582,8 @@ def main() -> None:
             api_token_create(args.name, args.days, args.tools)
         elif args.command == "api-token-revoke":
             api_token_revoke(args.token_id)
+        elif args.command == "api-token-rotate":
+            api_token_rotate(args.token_id, args.days)
         elif args.command == "client-revoke":
             revoke_client(args.client_id)
         elif args.command == "access":
