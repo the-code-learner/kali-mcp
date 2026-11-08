@@ -125,7 +125,55 @@ def main():
     private_result = json.load(tool_answer)
     assert "error" not in private_result, private_result
     assert not private_result.get("result", {}).get("isError"), private_result
-    print("HTTP OAuth/PKCE + tools/list + scoped jobs_list passed; count:", len(names))
+    # Verify real ASGI MCP SDK flow for API credentials on the SAME /mcp.
+    page = get("/")
+    assert page.status == 200, page.read()
+    csrf_match = re.search(r'name="csrf" value="([^"]+)"', page.read().decode())
+    assert csrf_match, "Missing WebUI CSRF"
+    api_created = post("/api/v1/api-tokens/create", {
+        "csrf": csrf_match.group(1),
+        "password": password,
+        "name": "CI smoke llama.cpp",
+        "days": "1",
+        "allowed_tools": "system_status",
+    })
+    assert api_created.status == 200, api_created.read()
+    api_html = api_created.read().decode("utf-8")
+    secret_match = re.search(r"kmp_[0-9a-f]{32}\.[A-Za-z0-9_-]{64}", api_html)
+    assert secret_match, "API token not visible in one-time response"
+    api_secret = secret_match.group(0)
+    token_match = re.search(r"Credential ID: <code>([0-9a-f]{32})</code>", api_html)
+    assert token_match
+    api_id = token_match.group(1)
+
+    def mcp_call(method, headers, name=None):
+        params = {"name": name, "arguments": {}} if method == "tools/call" else {}
+        request = Request(base + "/mcp", data=json.dumps({
+            "jsonrpc": "2.0", "id": 25, "method": method, "params": params,
+        }).encode(), method="POST", headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2025-06-18",
+            **headers})
+        try:
+            return opener.open(request, timeout=30)
+        except HTTPError as exc:
+            return exc
+
+    api_list = mcp_call("tools/list", {"Authorization": "Bearer " + api_secret})
+    assert api_list.status == 200, api_list.read()
+    assert "system_status" in [t["name"] for t in json.load(api_list)["result"]["tools"]]
+    custom_list = mcp_call("tools/list", {"X-Kali-MCP-API-Key": api_secret})
+    assert custom_list.status == 200, custom_list.read()
+    assert "system_status" in [t["name"] for t in json.load(custom_list)["result"]["tools"]]
+    blocked = mcp_call("tools/call", {"Authorization": "Bearer " + api_secret}, "terminal_open")
+    assert blocked.status == 403, blocked.read()
+    revoked = post("/api/v1/api-tokens/revoke", {
+        "csrf": csrf_match.group(1), "password": password, "token_id": api_id})
+    assert revoked.status == 303, revoked.read()
+    invalidated = mcp_call("tools/list", {"Authorization": "Bearer " + api_secret})
+    assert invalidated.status == 401, invalidated.read()
+    print("HTTP OAuth/PKCE + API Bearer/custom-header + revocation passed; tools:", len(names))
 
 
 if __name__ == "__main__":
