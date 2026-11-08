@@ -130,6 +130,18 @@ def main():
     assert page.status == 200, page.read()
     csrf_match = re.search(r'name="csrf" value="([^"]+)"', page.read().decode())
     assert csrf_match, "Missing WebUI CSRF"
+    browser_origin = os.getenv("KALI_MCP_SMOKE_BROWSER_ORIGIN", "")
+    if browser_origin:
+        preflight = Request(base + "/mcp", method="OPTIONS", headers={
+            "Origin": browser_origin, "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type"})
+        try:
+            cors_response = opener.open(preflight, timeout=15)
+        except HTTPError as exc:
+            raise AssertionError("MCP preflight rejected: " + str(exc.status)) from exc
+        assert cors_response.status == 204
+        assert cors_response.headers.get("Access-Control-Allow-Origin") == browser_origin
+
     api_created = post("/api/v1/api-tokens/create", {
         "csrf": csrf_match.group(1),
         "password": password,
@@ -147,7 +159,11 @@ def main():
     api_id = token_match.group(1)
 
     def mcp_call(method, headers, name=None):
-        params = {"name": name, "arguments": {}} if method == "tools/call" else {}
+        if method == "initialize":
+            params = {"protocolVersion": "2025-06-18", "capabilities": {},
+                      "clientInfo": {"name": "beta5-ci", "version": "1.0"}}
+        else:
+            params = {"name": name, "arguments": {}} if method == "tools/call" else {}
         request = Request(base + "/mcp", data=json.dumps({
             "jsonrpc": "2.0", "id": 25, "method": method, "params": params,
         }).encode(), method="POST", headers={
@@ -160,6 +176,13 @@ def main():
         except HTTPError as exc:
             return exc
 
+    api_initialize = mcp_call("initialize", {"Authorization": "Bearer " + api_secret})
+    # MCP initialize needs protocol/capability metadata, provided below by mcp_call.
+    assert api_initialize.status == 200, api_initialize.read()
+    assert "serverInfo" in json.load(api_initialize)["result"]
+    accepted_tool = mcp_call("tools/call", {"Authorization": "Bearer " + api_secret}, "system_status")
+    assert accepted_tool.status == 200, accepted_tool.read()
+    assert not json.load(accepted_tool).get("error")
     api_list = mcp_call("tools/list", {"Authorization": "Bearer " + api_secret})
     assert api_list.status == 200, api_list.read()
     assert "system_status" in [t["name"] for t in json.load(api_list)["result"]["tools"]]
