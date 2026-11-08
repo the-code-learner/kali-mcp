@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from kali_mcp.cli_config import parse_env
 from kali_mcp.deployment_settings import validate_change
 from manage_browser_origins import atomic_private
