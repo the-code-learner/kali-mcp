@@ -75,7 +75,13 @@ class Policy:
         if not addresses:
             raise PolicyDenied("No target address")
         allowed = [ipaddress.ip_network(x, strict=False) for x in self.cfg.allowed_cidrs]
-        if not all(any(address in network for network in allowed) for address in addresses):
+        denied = [ipaddress.ip_network(x, strict=False) for x in self.cfg.denied_cidrs]
+        # Exclusions take precedence, even over more specific allowed CIDRs
+        # and even in allow-all mode. Every resolved address must be allowed.
+        if any(any(address in network for network in denied) for address in addresses):
+            raise PolicyDenied("Target is in an explicitly denied CIDR")
+        if not self.cfg.allow_all_targets and not all(
+                any(address in network for network in allowed) for address in addresses):
             raise PolicyDenied("Target is outside authorized scope")
         return str(sorted(addresses, key=lambda x: (x.version, int(x)))[0])
 
