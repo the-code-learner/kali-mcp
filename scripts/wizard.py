@@ -271,7 +271,8 @@ def configure(path: Path, gid: int, *, interactive: bool, host_user: str = "kali
         "KALI_MCP_BROWSER_ORIGINS": ",".join(origins),
     }
     for name, value in shared.items():
-        if value or name != "KALI_MCP_BROWSER_ORIGINS":
+        if value or name not in {"KALI_MCP_BROWSER_ORIGINS",
+                                 "KALI_MCP_DENIED_CIDRS", "KALI_MCP_ALLOWED_CIDRS"}:
             if not SAFE_VALUE.fullmatch(value):
                 raise ValueError("Invalid configuration value for " + name)
     # Validate the effective policy even when resuming an old deployment.
