@@ -16,7 +16,7 @@ from .superuser import read_record
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.routing import Mount, Route
 
 from . import server as core
@@ -163,7 +163,28 @@ class SecurityGate:
                        headers.get("sec-fetch-site") == "same-origin")
             if ((origin and origin not in admin_origins and not null_ok)
                     or (not origin and referrer and not referer_ok)):
-                return await JSONResponse({"error": "origin_mismatch"}, status_code=403)(scope, receive, safe_send)
+                # A browser form needs usable feedback, whereas API clients
+                # continue to receive the machine-readable error code.
+                if "text/html" in headers.get("accept", "").lower():
+                    return await HTMLResponse(
+                        """<!doctype html><html lang="en"><head><meta charset="utf-8">
+                        <meta name="viewport" content="width=device-width">
+                        <title>Kali MCP — Request blocked</title>
+                        <link rel="stylesheet" href="/static/app.css"></head><body>
+                        <main class="report"><section><h2>Request blocked</h2>
+                        <p>The browser's Origin or Referer does not match the configured
+                        Kali MCP WebUI origin. No setting or update was changed.</p>
+                        <p>Return to the dashboard and reload the page. If this repeats,
+                        verify KALI_MCP_PUBLIC_URL matches the HTTPS WebUI address
+                        in your deployment configuration.</p>
+                        <a href="/">Return to dashboard</a></section></main></body></html>""",
+                        status_code=403, headers={
+                            "Cache-Control": "no-store",
+                            "Content-Security-Policy": (
+                                "default-src 'none'; style-src 'self'; base-uri 'none'"),
+                        })(scope, receive, safe_send)
+                return await JSONResponse({"error": "origin_mismatch"}, status_code=403)(
+                    scope, receive, safe_send)
 
         if method == "POST":
             max_size = 262144 if path.startswith("/mcp") else 16384

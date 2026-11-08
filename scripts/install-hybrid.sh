@@ -242,6 +242,18 @@ if test -f "$CONFIG/superuser.json"; then
   OLD_SUPERUSER_FINGERPRINT="$(sha256sum "$CONFIG/superuser.json" | cut -d' ' -f1)"
 fi
 VERIFY=(python3 "$TARGET/scripts/wizard.py" --config-dir "$CONFIG" --verify)
+# Appliances originally installed by beta.4 have complete settings but no
+# config.ready marker. During an upgrade, migrate only if every existing
+# config/credential file passes the strict beta.7 validator. Do not run the
+# interactive wizard from the detached systemd update unit and do not reset
+# any deployment ceilings, superuser credentials, or MCP settings.
+if test "$UPGRADE" = true && test ! -e "$CONFIG/config.ready" &&
+   test -f "$CONFIG/stack.env" && test -f "$CONFIG/agent.env" &&
+   test -f "$CONFIG/superuser.json"; then
+  phase legacy-config-migration
+  python3 "$TARGET/scripts/wizard.py" --config-dir "$CONFIG" --migrate-legacy
+  phase wizard
+fi
 if ! "${VERIFY[@]}"; then
   if test "$NONINTERACTIVE" = false && test "$RECONFIGURE" = false &&
      test "$REPAIR" = false && test "$RESUME" = false && test "$UPGRADE" = false &&

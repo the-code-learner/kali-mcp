@@ -411,7 +411,7 @@ class UI:
         </main><script src="/static/app.js?v={html.escape(installed or 'unknown', quote=True)}" defer></script></body></html>"""
         return HTMLResponse(body, headers={"Cache-Control": "no-store",
             "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'",
-            "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer"})
+            "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin"})
 
     async def status(self, request: Request):
         if (error := self._admin(request)):
