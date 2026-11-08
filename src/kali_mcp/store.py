@@ -70,6 +70,15 @@ class Store:
         """)
         for key in ("host_root", "host_exec", "package_install", "network_changes", "mcp_updates"):
             self.db.execute("INSERT OR IGNORE INTO settings VALUES (?, 'false')", (key,))
+        # Preserve historical OAuth job/audit visibility after introducing the
+        # mcp:oauth: vs mcp:api: actor namespaces. Prior releases stored only
+        # "mcp:" followed by a 32-character OAuth client ID.
+        self.db.execute("""
+            UPDATE jobs SET actor='mcp:oauth:' || substr(actor, 5)
+            WHERE substr(actor, 1, 4)='mcp:' AND length(actor)=36""")
+        self.db.execute("""
+            UPDATE audit SET actor='mcp:oauth:' || substr(actor, 5)
+            WHERE substr(actor, 1, 4)='mcp:' AND length(actor)=36""")
 
     @contextmanager
     def transaction(self):
