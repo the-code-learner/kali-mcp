@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from pathlib import Path
 import re
 import time
 import urllib.request
@@ -12,6 +13,35 @@ from packaging.version import Version, InvalidVersion
 
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 TAG_PATTERN = re.compile(r"^v\d+\.\d+\.\d+(?:-beta\.\d+)?$")
+
+
+def installed_release_tag(version_file: Path | None = None) -> str | None:
+    """Read the source release mounted in the running Core, not GitHub's latest.
+
+    The container's read-only release bind mount is replaced when the Core is
+    recreated, so this value changes only after activation, not when scheduled.
+    """
+    source = version_file if version_file is not None else Path(__file__).resolve().parents[2] / "VERSION"
+    try:
+        version = source.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    tag = "v" + version
+    return tag if TAG_PATTERN.fullmatch(tag) else None
+
+
+def is_update_available(installed: str | None, latest: str | None) -> bool | None:
+    """Return None when installation/comparison is unknown, not a false success."""
+    if not installed or not latest:
+        return None
+    if not TAG_PATTERN.fullmatch(installed) or not TAG_PATTERN.fullmatch(latest):
+        return None
+    try:
+        def parsed(tag: str) -> Version:
+            return Version(tag[1:].replace("-beta.", "b"))
+        return parsed(latest) > parsed(installed)
+    except InvalidVersion:
+        return None
 
 
 @dataclass(frozen=True)
