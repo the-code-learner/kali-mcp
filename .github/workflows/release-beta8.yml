@@ -53,7 +53,7 @@ jobs:
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: CI_BETA8_RELEASE_ONLY_PASSWORD_2026
           KALI_MCP_SMOKE_BROWSER_ORIGINS: "true"
-        run: sudo -E python3 scripts/smoke_browser_origins.py
+        run: sudo python3 scripts/smoke_browser_origins.py --ephemeral-ci
       - name: Verify OAuth, API key, CORS and live MCP transport
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: CI_BETA8_RELEASE_ONLY_PASSWORD_2026
