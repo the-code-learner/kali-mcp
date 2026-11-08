@@ -20,7 +20,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from kali_mcp.cli_config import parse_env
 from kali_mcp.deployment_settings import validate_change
-from manage_browser_origins import atomic_private, private_status as _unused
+from manage_browser_origins import atomic_private
 
 CONFIG = Path("/etc/kali-mcp")
 ROOT = Path("/opt/kali-mcp/current")
@@ -86,15 +86,18 @@ def activate(updates: dict[str, str]) -> None:
     ], check=True, timeout=210)
     # Verify the active Core has REALLY loaded requested settings; compose
     # interpolates defaults and a typo in an env key must not be 'success'.
-    expected = parse_env(CONFIG / "stack.env")
+    # Bind/host port are Docker Compose *publishing* settings, not Core
+    # environment variables; Docker's healthy status verifies their rollout.
+    # Everything else is passed to Core's explicit environment mapping.
+    core_keys = sorted(set(updates) - {"KALI_MCP_PORT", "KALI_MCP_BIND_ADDRESS"})
     observed = subprocess.check_output([
         "docker", "exec", "kali-mcp-core", "/opt/venv/bin/python",
         "-c", "import os,json; print(json.dumps({k:os.getenv(k) for k in "+
-        repr(sorted(updates))+"}))",
+        repr(core_keys)+"}))",
     ], text=True, timeout=15)
     values = json.loads(observed)
     for key, target in updates.items():
-        if values.get(key) != target:
+        if key in core_keys and values.get(key) != target:
             raise RuntimeError("Core did not apply " + key)
     # The native Agent is loaded from agent.env and owns capability ceilings.
     # Restart only when values in its environment change.
