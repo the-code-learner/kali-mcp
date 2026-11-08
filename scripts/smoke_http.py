@@ -159,8 +159,17 @@ def main():
         # Verify real ASGI MCP SDK flow for API credentials on the SAME /mcp.
         page = get("/")
         assert page.status == 200, page.read()
-        csrf_match = re.search(r'name="csrf" value="([^"]+)"', page.read().decode())
-        assert csrf_match, "Missing WebUI CSRF"
+        dashboard = page.read().decode()
+        assert "Kali MCP" in dashboard and "Control Center" in dashboard
+        # The production Control Center uses a non-executable meta CSRF token
+        # rather than embedding hundreds of sensitive forms in its HTML shell.
+        csrf_match = re.search(r'<meta name="kali-csrf" content="([^"]+)"', dashboard)
+        assert csrf_match, "Missing Control Center CSRF"
+        snapshot = get("/api/v1/ui/snapshot")
+        assert snapshot.status == 200, snapshot.read()
+        live_data = json.load(snapshot)
+        assert live_data["ok"] and "jobs" in live_data and "runtime" in live_data
+        assert "updates" in live_data and "run" in live_data["updates"]
         browser_origin = os.getenv("KALI_MCP_SMOKE_BROWSER_ORIGIN", "")
         if browser_origin:
             preflight = Request(base + "/mcp", method="OPTIONS", headers={
