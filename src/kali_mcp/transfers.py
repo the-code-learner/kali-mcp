@@ -29,6 +29,7 @@ MAX_GLOBAL_BYTES = 1_000_000_000
 MIN_FREE_BYTES = 128 * 1024 * 1024
 FILE_LIFETIME = 24 * 3600
 LINK_LIFETIME = 10 * 60
+MAX_BASE64_SESSION_AGE = 2 * 3600
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{40,96}$")
 MIME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.+_-]*/[a-zA-Z0-9][a-zA-Z0-9.+_-]*$")
 
@@ -229,9 +230,13 @@ class TransferVault:
                 output.write(chunk)
                 output.flush()
                 os.fsync(output.fileno())
+            # Refresh an idle timeout for long 100 MB MCP transfers while
+            # bounding abandoned reservations to two hours overall.
+            expires = min(int(time.time()) + LINK_LIFETIME,
+                          row["created"] + MAX_BASE64_SESSION_AGE)
             self.store.db.execute(
-                "UPDATE transfer_files SET written=written+? WHERE file_id=?",
-                (len(chunk), file_id))
+                "UPDATE transfer_files SET written=written+?,expires=? WHERE file_id=?",
+                (len(chunk), expires, file_id))
         return {"ok": True, "file_id": file_id, "written": offset + len(chunk),
                 "remaining": row["size"] - offset - len(chunk)}
 
