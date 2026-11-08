@@ -178,6 +178,13 @@ def validate_change(current: dict[str, str], changes: dict[str, str]) -> dict[st
                   "KALI_MCP_ALLOW_ALL_TARGETS"}
     if scope_keys.intersection(changes) and not scope_keys.issuperset(changes):
         raise ValueError("Scope settings cannot be mixed with deployment ceilings")
+    # A /0 allowlist silently means Allow all. Do not permit the browser form
+    # to bypass the explicit Allow all + blacklist confirmation workflow.
+    if "KALI_MCP_ALLOWED_CIDRS" in changes and not parse_bool(
+            next_values.get("KALI_MCP_ALLOW_ALL_TARGETS", "false")):
+        if any(ipaddress.ip_network(cidr).prefixlen == 0 for cidr in
+               parse_cidrs(next_values.get("KALI_MCP_ALLOWED_CIDRS", "127.0.0.1/32"))):
+            raise ValueError("Use Allow all plus a blacklist instead of a /0 allowlist")
     if (next_values.get("KALI_MCP_ALLOW_HOST_ROOT", "false") == "true" and
             next_values.get("KALI_MCP_ALLOW_HOST_EXEC", "false") != "true"):
         raise ValueError("Root ceiling requires Host Exec ceiling")
