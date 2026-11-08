@@ -43,6 +43,8 @@ def test_api_tokens_hash_expiry_revocation_and_oauth_isolation(tmp_path):
 
 
 def test_mcp_cors_header_and_per_tool_permissions(tmp_path, monkeypatch):
+    # runtime imports server.py, which opens its DB at import time.
+    monkeypatch.setenv("KALI_MCP_DATA_DIR", str(tmp_path))
     from kali_mcp import runtime
 
     monkeypatch.setenv("KALI_MCP_PUBLIC_URL", "https://kali.example.test")
