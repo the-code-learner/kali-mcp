@@ -177,6 +177,91 @@ class TransferVault:
                 "expires_in": LINK_LIFETIME,
                 "hint": "PUT exactly this number of raw bytes to the signed URL once."}
 
+    def begin_base64(self, owner: str, name: str, mime: str, size: int) -> dict:
+        """Reserve a file for ordered small Base64 chunks; 100 MB total."""
+        if type(size) is not int or size < 0:
+            raise TransferError("Chunked Base64 requires an exact nonnegative byte size")
+        self._sweep()
+        with self.store.transaction():
+            self._quota(owner, size)
+            file_id = self._new_record(owner, name, mime, size, "base64-pending")
+            path = self._path(file_id)
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                os.close(fd)
+            except BaseException:
+                path.unlink(missing_ok=True)
+                raise
+        return {"ok": True, "file_id": file_id, "mode": "base64",
+                "bytes": size, "written": 0, "chunk_bytes": MAX_BASE64_FILE,
+                "expires_in": LINK_LIFETIME,
+                "hint": "Send chunks sequentially with files_upload_chunk then files_upload_finish."}
+
+    def append_base64(self, owner: str, file_id: str,
+                      offset: int, data_base64: str) -> dict:
+        """Append one at-most-128-KiB chunk with strict sequential offset."""
+        if type(offset) is not int or offset < 0:
+            raise TransferError("Base64 chunk offset must be a nonnegative integer")
+        if (not isinstance(data_base64, str) or
+                len(data_base64) > (MAX_BASE64_FILE * 4 // 3 + 16)):
+            raise TransferError("Base64 part exceeds 128 KiB")
+        try:
+            chunk = base64.b64decode(data_base64, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise TransferError("Data is not valid Base64") from exc
+        if not chunk or len(chunk) > MAX_BASE64_FILE:
+            raise TransferError("Base64 chunk must contain 1–128 KiB")
+        self._sweep()
+        with self.store.transaction():
+            row = self.store.db.execute(
+                "SELECT * FROM transfer_files WHERE file_id=? AND owner=? "
+                "AND status='base64-pending' AND expires>?",
+                (file_id, owner, int(time.time()))).fetchone()
+            if row is None:
+                raise TransferError("Base64 upload not found or expired for this client")
+            if offset != row["written"] or offset + len(chunk) > row["size"]:
+                raise TransferError("Base64 chunk offset or size mismatch")
+            path = self._path(file_id)
+            if not path.is_file() or path.is_symlink() or path.stat().st_size != offset:
+                raise TransferError("Base64 upload file integrity mismatch")
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
+            with os.fdopen(fd, "wb") as output:
+                output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            self.store.db.execute(
+                "UPDATE transfer_files SET written=written+? WHERE file_id=?",
+                (len(chunk), file_id))
+        return {"ok": True, "file_id": file_id, "written": offset + len(chunk),
+                "remaining": row["size"] - offset - len(chunk)}
+
+    def finish_base64(self, owner: str, file_id: str) -> dict:
+        """Finalize only complete uploads, hashing the file in bounded chunks."""
+        self._sweep()
+        with self.store.transaction():
+            row = self.store.db.execute(
+                "SELECT * FROM transfer_files WHERE file_id=? AND owner=? "
+                "AND status='base64-pending' AND expires>?",
+                (file_id, owner, int(time.time()))).fetchone()
+            if row is None:
+                raise TransferError("Base64 upload not found or expired for this client")
+            if row["written"] != row["size"]:
+                raise TransferError("Base64 upload is incomplete")
+            path = self._path(file_id)
+            if not path.is_file() or path.is_symlink() or path.stat().st_size != row["size"]:
+                raise TransferError("Base64 upload file integrity mismatch")
+            sha = hashlib.sha256()
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    sha.update(chunk)
+            self.store.db.execute(
+                "UPDATE transfer_files SET status='ready', sha256=?, expires=? "
+                "WHERE file_id=? AND status='base64-pending'",
+                (sha.hexdigest(), int(time.time()) + FILE_LIFETIME, file_id))
+            return {"ok": True, "file_id": file_id, "bytes": row["size"],
+                    "sha256": sha.hexdigest(), "expires_in": FILE_LIFETIME}
+
     def _consume(self, secret: str, verb: str, status: str) -> dict | None:
         if not TOKEN_RE.fullmatch(secret):
             return None
@@ -245,7 +330,13 @@ class TransferVault:
                 self.store.db.execute("DELETE FROM transfer_files WHERE file_id=?", (file_id,))
             raise
 
-    def get_file(self, owner: str, file_id: str, mode: str) -> dict:
+    def get_file(self, owner: str, file_id: str, mode: str,
+                 offset: int = 0, max_bytes: int = MAX_BASE64_FILE) -> dict:
+        """OpenLink gives a one-use URL; Base64 returns a bounded window.
+
+        Every Base64 response is at most 128 KiB raw (under 175 KiB JSON).
+        Clients repeat with next_offset until done, then verify sha256.
+        """
         self._sweep()
         if not re.fullmatch(r"[a-f0-9]{32}", file_id):
             raise TransferError("Unknown file ID")
@@ -266,15 +357,21 @@ class TransferVault:
                 return result
             if mode != "base64":
                 raise TransferError("File mode must be 'openlink' or 'base64'")
-            if row["size"] > MAX_BASE64_FILE:
-                raise TransferError("File exceeds Base64 limit; use OpenLink")
+            if (type(offset) is not int or offset < 0 or offset > row["size"] or
+                    type(max_bytes) is not int or not (1 <= max_bytes <= MAX_BASE64_FILE)):
+                raise TransferError("Base64 window must be within the file and at most 128 KiB")
             path = self._path(file_id)
-            if not path.is_file() or path.is_symlink():
-                raise TransferError("File content is unavailable")
-            raw = path.read_bytes()
-            if len(raw) != row["size"] or hashlib.sha256(raw).hexdigest() != row["sha256"]:
-                raise TransferError("File integrity validation failed")
+            if not path.is_file() or path.is_symlink() or path.stat().st_size != row["size"]:
+                raise TransferError("File content is unavailable or modified")
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(fd, "rb") as stream:
+                stream.seek(offset)
+                raw = stream.read(min(max_bytes, row["size"] - offset))
             result["data_base64"] = base64.b64encode(raw).decode("ascii")
+            result["offset"] = offset
+            result["next_offset"] = offset + len(raw)
+            result["done"] = result["next_offset"] == row["size"]
+            result["chunk_sha256"] = hashlib.sha256(raw).hexdigest()
             return result
 
     def list_files(self, owner: str) -> dict:
