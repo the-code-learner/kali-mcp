@@ -18,7 +18,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 
 from .config import Config
 from .policy import Policy, PolicyDenied
-from .releases import UpdateChecker
+from .releases import UpdateChecker, installed_release_tag, is_update_available
 from .store import Store, digest
 from .jobs import Jobs
 from .superuser import read_record, record_fingerprint, verify
@@ -166,6 +166,37 @@ class Admin:
 class UI:
     def __init__(self, cfg: Config, store: Store, policy: Policy, jobs: Jobs, updates: UpdateChecker):
         self.cfg, self.store, self.policy, self.jobs, self.updates = cfg, store, policy, jobs, updates
+
+    def _upgrade_gate(self) -> tuple[bool, str]:
+        """Explain both deployment and administrator gates, without changing policy."""
+        if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() != "true":
+            return False, "WebUI installation requires the native systemd Host Agent."
+        if not self.cfg.ceilings()["mcp_updates"]["allowed"]:
+            return False, ("Update installation is disabled by the deployment ceiling "
+                           "KALI_MCP_ALLOW_MCP_UPDATES=false. Enable it in the "
+                           "SSH wizard (sudo kali-mcp, option w), and then enable "
+                           "the MCP Updates switch in WebUI.")
+        if not self.store.get_setting("mcp_updates"):
+            return False, ("Update installation is currently off. Enable "
+                           "'MCP Updates' under 'Execution capabilities', "
+                           "confirming the superuser password.")
+        return True, "Installation is authorized; the services will restart."
+
+    @staticmethod
+    def _upgrade_notice(title: str, message: str, status_code: int = 403) -> HTMLResponse:
+        """Provide usable navigation and human-readable errors to browser forms."""
+        body = ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width">
+        <title>Kali MCP — Update status</title>
+        <link rel="stylesheet" href="/static/app.css"></head><body>
+        <main class="report"><section><h2>""" + html.escape(title) +
+        "</h2><p>" + html.escape(message) +
+        """</p><p>No new upgrade was started by this request.</p>
+        <a href="/">Return to dashboard</a></section></main></body></html>""")
+        return HTMLResponse(body, status_code=status_code,
+            headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                     "X-Frame-Options": "DENY",
+                     "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'"})
 
     def _admin(self, request: Request):
         if not request.state.admin:
@@ -324,6 +355,16 @@ class UI:
                 '<input type="password" name="password" placeholder="Superuser password" required>'
                 '<button type="submit">Rotate</button></form>') if not t["revoked"] else "")
             + "</td></tr>" for t in self.store.list_api_tokens(100))
+        latest = (self.updates.status() if self.updates is not None else {}).get("latest")
+        installed = installed_release_tag()
+        comparison = is_update_available(installed, latest)
+        upgrade_allowed, upgrade_guidance = self._upgrade_gate()
+        if comparison is False:
+            upgrade_guidance = "This Core already has the newest eligible GitHub release."
+        elif comparison is None and upgrade_allowed:
+            upgrade_guidance = ("A newer release cannot be confirmed yet. Click Check now to refresh.")
+        install_disabled = "" if upgrade_allowed and comparison is True and not (self.updates.status() if self.updates is not None else {}).get("error") else " disabled"
+
         body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
         <title>Kali MCP — Dashboard</title><link rel="stylesheet" href="/static/app.css"></head><body>
         <header><h1>Kali MCP <small>Control Plane</small></h1>
@@ -335,15 +376,18 @@ class UI:
         <table><thead><tr><th>Tool</th><th>Client</th><th>State</th><th>Result</th></tr></thead><tbody id="jobs">{rows}</tbody></table></section>
         <section><h2>Execution capabilities</h2><p class="warning">Host execution is privileged by design. These switches authorize client operations, not protection from control-plane compromise.</p>
         {''.join(toggles)}</section>
-        <section><h2>Updates</h2><p id="updates">Checking ...</p>
+        <section><h2>Updates</h2>
+        <p id="updates" role="status">Installed: {html.escape(installed or "unknown")} ·
+        Latest available: {html.escape(latest or "checking ...")}</p>
         <form method="post" action="/api/v1/updates/check">
         <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}"><button>Check now</button></form>
-        <p class="muted">Updates are checked automatically but NEVER installed without administrator or authorized MCP action.</p>
+        <p class="muted">Checking GitHub only discovers releases; it never installs one.</p>
+        <p id="update-guidance" class="muted" role="status">{html.escape(upgrade_guidance)}</p>
         <form method="post" action="/api/v1/updates/install">
         <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
         <label><input type="checkbox" name="confirm_update" value="yes" required>
-        I understand this updates the native Agent and Core and restarts services.</label>
-        <button type="submit">Install latest eligible release</button></form></section>
+        I understand this schedules an update of the native Agent and Core, including service restarts.</label>
+        <button type="submit" id="install-update"{install_disabled}>Install available release</button></form></section>
         <section><h2>Authorized MCP clients</h2>
         <p class="muted">Revocation invalidates all active bearer and refresh tokens for that client.</p>
         <table><thead><tr><th>Client</th><th>ID</th><th>State</th><th>Action</th></tr></thead>
@@ -364,7 +408,7 @@ class UI:
            <th>Last used</th><th>Tools</th><th>Action</th></tr></thead><tbody>{api_rows}</tbody></table>
          </section>
          <section><h2>Audit</h2><pre id="audit">Loading ...</pre></section>
-        </main><script src="/static/app.js" defer></script></body></html>"""
+        </main><script src="/static/app.js?v={html.escape(installed or 'unknown', quote=True)}" defer></script></body></html>"""
         return HTMLResponse(body, headers={"Cache-Control": "no-store",
             "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'",
             "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer"})
@@ -378,10 +422,23 @@ class UI:
             broker = call(self.cfg.broker_socket, "ping", timeout=2).get("broker", "unknown")
         except Exception:
             broker = "offline"
+        release_status = self.updates.status()
+        installed = installed_release_tag()
+        comparison = is_update_available(installed, release_status.get("latest"))
+        allowed, guidance = self._upgrade_gate()
+        if comparison is False:
+            guidance = "Already installed: the newest eligible GitHub release."
+        elif comparison is None and allowed:
+            guidance = ("A newer release cannot be verified yet. Click Check now; "
+                        "installation remains disabled.")
+        release_status = {**release_status, "installed": installed,
+                          "update_available": comparison,
+                          "install_allowed": allowed and comparison is True and not bool(release_status.get("error")),
+                          "install_guidance": guidance}
         return JSONResponse({
             "broker": broker, "jobs": self.store.list_jobs(100),
             "audit": self.store.list_audit(25),
-            "updates": self.updates.status(),
+            "updates": release_status,
             "settings": {key: {"enabled": self.store.get_setting(key), **item}
                          for key, item in self.cfg.ceilings().items()},
         }, headers={"Cache-Control": "no-store"})
@@ -436,20 +493,36 @@ class UI:
         if (error := self._csrf(request, str(form.get("csrf") or ""))):
             return error
         if str(form.get("confirm_update") or "") != "yes":
-            return JSONResponse({"error": "Administrator must confirm upgrade"}, status_code=400)
-        if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() != "true":
-            return JSONResponse({"error": "Native systemd Agent required"}, status_code=403)
+            return self._upgrade_notice("Update not started",
+                                        "Administrator confirmation is required.", 400)
+        allowed, guidance = self._upgrade_gate()
+        if not allowed:
+            self.store.audit("webui", "upgrade.request", "deny", guidance[:200])
+            return self._upgrade_notice("Update blocked", guidance)
         try:
             self.policy.require("mcp_updates", actor="webui")
-            tag = self.updates.check(force=True).get("latest")
+            checked = self.updates.check(force=True)
+            if checked.get("error"):
+                return self._upgrade_notice("Update check failed",
+                    "GitHub could not be checked: " + str(checked["error"])[:200], 503)
+            tag = checked.get("latest")
             if not tag:
-                return JSONResponse({"error": "No eligible release; check GitHub connectivity"}, status_code=503)
+                return self._upgrade_notice("Update not started",
+                                            "No eligible release was returned by GitHub.", 503)
+            installed = installed_release_tag()
+            comparison = is_update_available(installed, tag)
+            if comparison is False:
+                return self._upgrade_notice("Already up to date",
+                    "Installed: " + str(installed) + ". Latest available: " + str(tag) + ".", 409)
+            if comparison is None:
+                return self._upgrade_notice("Update not started",
+                    "Cannot verify the installed version; check the Core deployment.", 503)
             result = self.jobs.submit(actor="webui", tool_id="core-upgrade",
                                       mode="systemd", operation="updates_install", payload={"tag": tag})
             self.store.audit("webui", "upgrade.request", "allow", tag)
             return RedirectResponse("/jobs/" + result["job_id"], status_code=303)
         except (PolicyDenied, ValueError) as exc:
-            return JSONResponse({"error": str(exc)}, status_code=403)
+            return self._upgrade_notice("Update blocked", str(exc))
 
     async def revoke_client(self, request: Request):
         if (error := self._admin(request)):

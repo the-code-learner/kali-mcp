@@ -25,6 +25,22 @@ def report_html(job: dict, events: list[dict]) -> str:
                       for e in events)
     if not details:
         details = "<li>No execution events recorded</li>"
+    # For self-updating appliances, the worker only schedules an independent
+    # systemd unit. A completed scheduling job is not an installed upgrade.
+    update_note = ""
+    if job.get("tool_id") == "core-upgrade":
+        if job.get("state") == "completed" and result.get("scheduled") is True:
+            target = escape(str(result.get("tag") or "unknown"))
+            update_note = ("""<p><strong>Upgrade scheduled (not yet confirmed installed).</strong> """
+                           "systemd accepted the update to <code>" + target +
+                           "</code>. The Agent and Core will restart. Return to the dashboard "
+                           "and check the <strong>Installed</strong> version after they return.</p>")
+        elif job.get("state") == "failed":
+            update_note = ("<p><strong>Upgrade scheduling failed.</strong> "
+                           "No installation is confirmed. Check the error below.</p>")
+        else:
+            update_note = ("<p><strong>Scheduling upgrade ...</strong> "
+                           "This job does not track completion of the detached installer.</p>")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width">
@@ -35,6 +51,7 @@ def report_html(job: dict, events: list[dict]) -> str:
 <main class="report">
 <section><h2>{item}</h2>
 <p><strong>Status:</strong> {status} &nbsp; <strong>Exit:</strong> {exit_code}</p>
+{update_note}
 <p class="muted">ID: <code>{jid}</code></p>
 <p class="muted">Client: <code>{actor}</code></p>
 <p class="muted">Started: {started} · Finished: {finished}</p></section>
