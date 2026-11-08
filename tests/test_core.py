@@ -162,9 +162,10 @@ def test_runtime_oauth_gate(initialized):
     assert login.status_code == 303
     dashboard = client.get("/")
     assert dashboard.status_code == 200
-    assert "Execution capabilities" in dashboard.text
+    assert "Control Center" in dashboard.text
+    assert "Execution capabilities" in client.get("/legacy").text
     from re import search
-    csrf_match = search(r'name="csrf" value="([^"]+)"', dashboard.text)
+    csrf_match = search(r'<meta name="kali-csrf" content="([^"]+)"', dashboard.text)
     assert csrf_match
     csrf = csrf_match.group(1)
     # Host execution can be enabled independently of MCP root privileges.
