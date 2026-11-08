@@ -13,15 +13,20 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import time
 from uuid import uuid4
 
 from .store import Store, digest
 
-MAX_BASE64_FILE = 256 * 1024
-MAX_OPENLINK_FILE = 8 * 1024 * 1024
+# MCP JSON bodies are limited to 256 KiB, so each Base64 part must fit in
+# one call with room for the JSON-RPC envelope and tool metadata.
+MAX_BASE64_FILE = 128 * 1024  # inline upload/download bytes per RPC
+MAX_OPENLINK_FILE = 100_000_000  # 100 decimal MB per complete file
 MAX_OWNER_FILES = 16
-MAX_OWNER_BYTES = 32 * 1024 * 1024
+MAX_OWNER_BYTES = 300_000_000
+MAX_GLOBAL_BYTES = 1_000_000_000
+MIN_FREE_BYTES = 128 * 1024 * 1024
 FILE_LIFETIME = 24 * 3600
 LINK_LIFETIME = 10 * 60
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{40,96}$")
@@ -62,7 +67,8 @@ class TransferVault:
               file_id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,
               mime_type TEXT NOT NULL, size INTEGER NOT NULL,
               sha256 TEXT NOT NULL, status TEXT NOT NULL,
-              created INTEGER NOT NULL, expires INTEGER NOT NULL);
+              created INTEGER NOT NULL, expires INTEGER NOT NULL,
+              written INTEGER NOT NULL DEFAULT 0);
             CREATE INDEX IF NOT EXISTS transfer_owner ON transfer_files(owner,expires);
             CREATE TABLE IF NOT EXISTS transfer_tickets (
               ticket_hash TEXT PRIMARY KEY, file_id TEXT NOT NULL,
@@ -92,21 +98,34 @@ class TransferVault:
         if not owner.startswith(("mcp:oauth:", "mcp:api:")) or len(owner) > 140:
             raise TransferError("Only authenticated MCP clients can transfer files")
         if size < 0 or size > MAX_OPENLINK_FILE:
-            raise TransferError("OpenLink files must be at most 8 MiB")
+            raise TransferError("Files must be at most 100 MB")
+        # Reserve a minimum amount of disk for the Core DB and event logs,
+        # even if the quota counters are still far below their ceilings.
+        if shutil.disk_usage(self.directory).free - size < MIN_FREE_BYTES:
+            raise TransferError("Not enough disk space for this file transfer")
         row = self.store.db.execute(
             "SELECT COUNT(*) AS files, COALESCE(SUM(size),0) AS bytes FROM transfer_files "
             "WHERE owner=? AND expires>?", (owner, int(time.time()))).fetchone()
         if row["files"] >= MAX_OWNER_FILES or row["bytes"] + size > MAX_OWNER_BYTES:
-            raise TransferError("File quota reached: 16 files / 32 MiB per MCP client")
+            raise TransferError("File quota reached: 16 files / 300 MB per MCP client")
+        global_reserved = self.store.db.execute(
+            "SELECT COALESCE(SUM(size),0) AS bytes FROM transfer_files "
+            "WHERE expires>?", (int(time.time()),)).fetchone()["bytes"]
+        if global_reserved + size > MAX_GLOBAL_BYTES:
+            raise TransferError("Transfer storage quota reached: 1 GB total")
 
     def _new_record(self, owner: str, name: str, mime: str,
                     size: int, status: str, sha256: str = "") -> str:
         identity = uuid4().hex
         now = int(time.time())
         self.store.db.execute(
-            "INSERT INTO transfer_files VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO transfer_files "
+            "(file_id,owner,name,mime_type,size,sha256,status,created,expires,written)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
             (identity, owner, file_name(name), mime_name(mime), size,
-             sha256, status, now, now + (LINK_LIFETIME if status == "pending" else FILE_LIFETIME)))
+             sha256, status, now,
+             now + (LINK_LIFETIME if status in {"pending", "base64-pending"} else FILE_LIFETIME),
+             size if status == "ready" else 0))
         return identity
 
     def _ticket(self, file_id: str, verb: str) -> str:
@@ -117,7 +136,7 @@ class TransferVault:
 
     def put_bytes(self, owner: str, name: str, mime: str, content: bytes) -> dict:
         if not isinstance(content, bytes) or len(content) > MAX_BASE64_FILE:
-            raise TransferError("Base64 mode supports at most 256 KiB per file")
+            raise TransferError("Inline Base64 supports at most 128 KiB; use chunks for larger files")
         self._sweep()
         with self.store.transaction():
             self._quota(owner, len(content))
@@ -137,7 +156,7 @@ class TransferVault:
 
     def put_base64(self, owner: str, name: str, mime: str, value: str) -> dict:
         if not isinstance(value, str) or len(value) > (MAX_BASE64_FILE * 4 // 3 + 16):
-            raise TransferError("Base64 upload exceeds 256 KiB")
+            raise TransferError("Base64 part exceeds 128 KiB")
         try:
             raw = base64.b64decode(value, validate=True)
         except (ValueError, binascii.Error) as exc:
