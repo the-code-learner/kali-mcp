@@ -14,6 +14,7 @@ Starting with v0.1.0-beta.10, Kali MCP supports moving files **from an MCP clien
 | Total Core transfer storage | 1 GB |
 | Reserved free disk | At least 128 MiB remaining |
 | File retention | 24 hours after completion |
+| Chunked Base64 upload idle timeout | 10 minutes, refreshed after each accepted chunk; 2-hour maximum session |
 | Signed OpenLink | 10 minutes, single-use |
 
 **Large transfers:** OpenLink is more efficient. Base64 chunking works when the client has access only to MCP tools, but adds ~33% encoding overhead and many JSON-RPC calls. Download and verify the reported full-file SHA-256.
