@@ -370,6 +370,9 @@ function markConnection(online){
 function applyLive(data){
  lastSnapshot=data; state.hasSnapshot=true; state.serverError='';
  state.coreOnline=true; state.agentOnline=Boolean(data.agent?.online);
+ state.inventoryAvailable=data.agent?.inventory_available===true;
+ state.deploymentState=String(data.deployment?.state||'unavailable');
+ state.serverScope=data.effective_scope||null;
  state.installed=String(data.updates?.installed||data.core?.version||'unknown');
  state.latest=String(data.updates?.latest||'Non verificata');
  state.allowInstall=data.updates?.install_allowed===true;
@@ -385,10 +388,43 @@ function applyLive(data){
  for(const item of state.inventory)if(item.editable)state.cfg[item.name]=String(item.value??'');
  state.runtime={};
  for(const id of runtime)state.runtime[id[0]]=Boolean(data.runtime?.[id[0]]?.enabled);
- if(!state.scopeDirty){
-   state.mode=state.cfg.KALI_MCP_ALLOW_ALL_TARGETS==='true'?'all':'allowlist';
-   state.draftAllowed=state.cfg.KALI_MCP_ALLOWED_CIDRS||'';
-   state.draftDenied=state.cfg.KALI_MCP_DENIED_CIDRS||'';
+ if(state.scopePending){
+   const req=state.scopePending;
+   const normalized=value=>String(value||'').replace(/[\\n;\\s]+/g,',').replace(/,+/g,',').replace(/^,|,$/g,'');
+   const persisted=state.inventoryAvailable &&
+     state.cfg.KALI_MCP_ALLOW_ALL_TARGETS===req.allowAll &&
+     normalized(state.cfg.KALI_MCP_ALLOWED_CIDRS)===normalized(req.allowed) &&
+     normalized(state.cfg.KALI_MCP_DENIED_CIDRS)===normalized(req.denied);
+   const effective=state.serverScope &&
+     String(state.serverScope.allow_all)===String(req.allowAll==='true') &&
+     normalized((state.serverScope.allowed||[]).join(','))===normalized(req.allowed) &&
+     normalized((state.serverScope.denied||[]).join(','))===normalized(req.denied);
+   if(persisted && effective && state.deploymentState==='active'){
+     state.scopePending=null;state.scopeDirty=false;
+     state.scopeNotice='Blacklist e allowlist applicate e verificate sul Core.';
+     toast('Authorized Scope applicato: Core e Native Host Agent verificati.');
+   }else if(['rolled_back','recovery_failed'].includes(state.deploymentState)
+         && Date.parse(data.deployment?.updated_at||'')>=req.startedAt){
+     state.scopePending=null;state.scopeDirty=true;
+     state.scopeNotice='Il worker ha ripristinato la configurazione precedente. I tuoi valori restano nel modulo.';
+     toast('Applicazione fallita: rollback. Nessuna nuova autorizzazione confermata.','bad');
+   }else if(Date.now()-req.startedAt>300000){
+     state.scopePending=null;state.scopeDirty=true;
+     state.scopeNotice='Conferma non disponibile dopo 5 minuti. Verifica lo stato Agent prima di riprovare.';
+     toast('Applicazione dello scope non verificata; non ripetere alla cieca.','bad');
+   }
+ }
+ if(!state.scopeDirty && !state.scopePending){
+   if(state.inventoryAvailable){
+     state.mode=state.cfg.KALI_MCP_ALLOW_ALL_TARGETS==='true'?'all':'allowlist';
+     state.draftAllowed=state.cfg.KALI_MCP_ALLOWED_CIDRS||'';
+     state.draftDenied=state.cfg.KALI_MCP_DENIED_CIDRS||'';
+   }else if(state.serverScope){
+     // These are effective Core values, NOT a writable Agent inventory.
+     state.mode=state.serverScope.allow_all?'all':'allowlist';
+     state.draftAllowed=(state.serverScope.allowed||[]).join(',');
+     state.draftDenied=(state.serverScope.denied||[]).join(',');
+   }
  }
  state.origins=Array.isArray(data.origins?.configured)?data.origins.configured:[];
  state.activeOrigins=Array.isArray(data.origins?.active)?data.origins.active:[];
@@ -560,6 +596,8 @@ function liveAction(action,el){
       ()=>{void postLive('/api/v1/updates/install',{confirm_update:'yes'});});
  }
  if(action==='save-scope'){
+   if(!state.inventoryAvailable)return toast('Native Host Agent non disponibile. Modifica non inviata.','bad');
+   if(state.scopePending)return toast('Una modifica dello scope è già in verifica.','bad');
    state.draftAllowed=document.getElementById('allowedCidrs')?.value||'';
    state.draftDenied=document.getElementById('deniedCidrs')?.value||'';
    const allowed=state.draftAllowed.replace(/[\n;]+/g,',').trim();
@@ -571,12 +609,26 @@ function liveAction(action,el){
    promptAdmin('Applica Authorized Scope',
      'Blacklist e allowlist vengono verificate dal Native Agent. La modifica riavvia il Core e mantiene un rollback.',
      async(password)=>{
+       // Preserve submitted values through the Core restart, and never
+       // present an HTTP 202 scheduling acknowledgment as applied state.
+       state.scopeDirty=true;
        const answer=await postLive('/settings/deployment',{
          section:'scope',password,
          KALI_MCP_ALLOW_ALL_TARGETS:all?'true':'false',
          KALI_MCP_ALLOWED_CIDRS:allowed,
-         KALI_MCP_DENIED_CIDRS:denied,confirm:all?'ALLOW ALL':''});
-       if(answer)state.scopeDirty=false;
+         KALI_MCP_DENIED_CIDRS:denied,confirm:all?'ALLOW ALL':''
+       },{expectJSON:true});
+       if(answer?.scheduled){
+         state.scopePending={allowAll:all?'true':'false',allowed,denied,startedAt:Date.now()};
+         state.scopeNotice='Operazione pianificata: attendo conferma Core + Agent.';
+       }else if(answer?.unchanged){
+         state.scopeDirty=false;
+         state.scopeNotice='La configurazione era già salvata.';
+       }else{
+         state.scopeDirty=true;
+         state.scopeNotice='La modifica non è stata confermata. I valori inseriti sono conservati.';
+       }
+       render();
      });return;
  }
  if(action==='ceiling'){
