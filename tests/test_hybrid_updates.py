@@ -24,6 +24,10 @@ def test_upgrade_requires_host_owned_policy_and_exact_release(tmp_path, monkeypa
         {"tag_name": "v0.1.0-beta.2", "draft": False, "prerelease": True},
         {"tag_name": "v0.1.0-beta.3", "draft": False, "prerelease": True},
     ])
+    # Real production state is root-owned; unit tests isolate the new
+    # detached-installer status path instead of writing /var/lib/kali-mcp.
+    monkeypatch.setattr("kali_mcp.host_agent.load_update_state", lambda: {"state": "idle"})
+    monkeypatch.setattr("kali_mcp.host_agent.save_update_state", lambda **kwargs: kwargs)
     calls = []
     monkeypatch.setattr(native, "_run", lambda argv, **kwargs:
         calls.append(argv) or {"ok": True, "exit_code": 0})
@@ -31,7 +35,8 @@ def test_upgrade_requires_host_owned_policy_and_exact_release(tmp_path, monkeypa
     assert result["scheduled"] is True
     assert calls[0][0] == "systemd-run"
     assert "--setenv=KALI_MCP_VERSION=v0.1.0-beta.3" in calls[0]
-    assert calls[0][-2:] == ["/opt/kali-mcp/current/scripts/install-hybrid.sh", "--upgrade"]
+    assert calls[0][-2:] == ["--tag", "v0.1.0-beta.3"]
+    assert "/opt/kali-mcp/current/scripts/upgrade_supervisor.py" in calls[0]
     with pytest.raises(BrokerDenied):
         native.dispatch("updates_install", {"tag": "v0.1.0-beta.2"})
     with pytest.raises(BrokerDenied):
