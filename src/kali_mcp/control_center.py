@@ -81,10 +81,22 @@ async def snapshot(ui, request):
              for row in ui.store.list_clients(100)]
     fields = inventory.get("fields", []) if inventory.get("ok") else []
     configured = cors.get("configured", []) if cors.get("ok") else []
+    # Ping can occasionally time out while another IPC request succeeds.
+    # Report Agent health from all authoritative IPC responses instead of
+    # showing a false "offline" badge on one failed ping. Inventory has its
+    # own availability flag: a reachable Agent alone is not evidence that the
+    # scope configuration was read successfully.
+    agent_online = any(item.get("ok") for item in
+                       (agent, inventory, cors, upgrade))
+    inventory_available = bool(inventory.get("ok")) and all(
+        any(field.get("name") == key for field in fields)
+        for key in ("KALI_MCP_ALLOWED_CIDRS", "KALI_MCP_DENIED_CIDRS",
+                    "KALI_MCP_ALLOW_ALL_TARGETS"))
     return JSONResponse({
         "ok": True,
         "core": {"online": True, "version": installed},
-        "agent": {"online": bool(agent.get("ok")),
+        "agent": {"online": bool(agent_online),
+                  "inventory_available": inventory_available,
                   "name": agent.get("broker", "Native Host Agent")},
         "updates": {**release, "installed": installed,
                     "available": comparison, "install_allowed": bool(
@@ -102,6 +114,6 @@ async def snapshot(ui, request):
         "oauth": oauth,
         "jobs": ui.store.list_jobs(100),
         "audit": ui.store.list_audit(60),
-        "flags": {"admin": True, "host_agent": bool(agent.get("ok"))},
+        "flags": {"admin": True, "host_agent": bool(agent_online)},
     }, headers={"Cache-Control": "private, no-store",
                 "X-Content-Type-Options": "nosniff"})
