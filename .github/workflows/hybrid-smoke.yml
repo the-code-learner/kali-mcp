@@ -107,6 +107,8 @@ jobs:
         run: sudo python3 scripts/smoke_browser_origins.py --ephemeral-ci
       - name: Verify WebUI deployment scope through root Agent and rollback-capable worker
         run: sudo python3 scripts/smoke_deployment_settings.py --ephemeral-ci
+      - name: Verify Core still reaches Native Agent after two systemd service restarts
+        run: sudo python3 scripts/smoke_agent_socket_restart.py --ephemeral-ci
       - name: Verify OAuth consent and protected MCP tools/list
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: CI_HYBRID_PASSWORD_TEST_ONLY_2026
