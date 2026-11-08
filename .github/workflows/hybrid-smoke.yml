@@ -104,7 +104,7 @@ jobs:
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: CI_HYBRID_PASSWORD_TEST_ONLY_2026
           KALI_MCP_SMOKE_BROWSER_ORIGINS: "true"
-        run: sudo -E python3 scripts/smoke_browser_origins.py
+        run: sudo python3 scripts/smoke_browser_origins.py --ephemeral-ci
       - name: Verify OAuth consent and protected MCP tools/list
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: CI_HYBRID_PASSWORD_TEST_ONLY_2026
