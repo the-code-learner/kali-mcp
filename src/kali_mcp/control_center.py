@@ -80,6 +80,24 @@ async def snapshot(ui, request):
               "status": "Attivo" if row["active"] else "Revocato / scaduto"}
              for row in ui.store.list_clients(100)]
     fields = inventory.get("fields", []) if inventory.get("ok") else []
+    # The deployment inventory comes exclusively from the root Native Agent.
+    # If it is unavailable show the full setting schema with *unavailable*
+    # values (never invented defaults) and disable all changes. A Core that
+    # still serves HTTP is not proof that its privileged Agent is healthy.
+    if not inventory_available:
+        fields = [
+            {"name": field.name, "value": "Non disponibile",
+             "editable": False, "group": field.group,
+             "type": field.kind, "description": field.description,
+             "source": "unavailable"}
+            for field in FIELD_MAP.values()
+        ] + [
+            {"name": name, "value": "(non disponibile)",
+             "editable": False, "group": "Installer / internal",
+             "type": "readonly", "description": desc,
+             "source": "unavailable"}
+            for name, desc in READONLY_REASONS.items()
+        ]
     configured = cors.get("configured", []) if cors.get("ok") else []
     # Ping can occasionally time out while another IPC request succeeds.
     # Report Agent health from all authoritative IPC responses instead of
@@ -104,7 +122,13 @@ async def snapshot(ui, request):
                     "guidance": guidance,
                     "run": upgrade.get("update", {"state": "unknown",
                                                  "phase": "scheduled"})},
-        "deployment": inventory.get("deployment", {}),
+        "deployment": inventory.get("deployment", {"state": "unavailable"}),
+        "effective_scope": {
+            "allow_all": bool(ui.cfg.allow_all_targets),
+            "allowed": list(ui.cfg.allowed_cidrs),
+            "denied": list(ui.cfg.denied_cidrs),
+            "source": "running Core configuration",
+        },
         "fields": fields,
         "runtime": current,
         "origins": {"configured": configured,
