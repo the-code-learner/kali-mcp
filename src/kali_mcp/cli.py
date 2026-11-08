@@ -379,18 +379,27 @@ def setup_cloudflare() -> None:
     print("Keep the administrative WebUI protected by Cloudflare Access.")
     print("Check docs/CLOUDFLARE.md before enabling a public route.")
     if not shutil.which("cloudflared"):
-        if input("Install cloudflared from Cloudflare's signed apt repository? [y/N]: ").strip().lower() != "y":
+        print("cloudflared not installed; checking distribution-signed APT packages.")
+        if input("Try distribution APT cloudflared package? [y/N]: ").strip().lower() != "y":
             return
-        keys = Path("/usr/share/keyrings")
-        keys.mkdir(parents=True, exist_ok=True)
-        from urllib.request import urlopen
-        keydata = urlopen("https://pkg.cloudflare.com/cloudflare-main.gpg", timeout=20).read(2_000_000)
-        (keys / "cloudflare-main.gpg").write_bytes(keydata)
-        (keys / "cloudflare-main.gpg").chmod(0o644)
-        Path("/etc/apt/sources.list.d/cloudflared.list").write_text(
-            "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] "
-            "https://pkg.cloudflare.com/cloudflared any main\n")
-        apt_install("cloudflared")
+        try:
+            apt_install("cloudflared")
+        except (RuntimeError, subprocess.CalledProcessError, OSError) as error:
+            print("APT install failed (possibly GPG/repository/HTTP 403).")
+            print("MCP Core and Host Agent remain operational; access wizard can be retried.")
+            print("Install a verified official cloudflared package for this architecture,")
+            print("checking the publisher signature/checksum before dpkg -i, then return here.")
+            print("Reference: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/")
+            return
+    binary = shutil.which("cloudflared")
+    if not binary:
+        print("cloudflared executable not detected after installation; retry later.")
+        return
+    version = run(binary, "--version", capture=True)
+    if version.returncode:
+        print("cloudflared binary version check failed; refusing to enable tunnel.")
+        return
+    print(version.stdout.strip())
     if input("Configured Cloudflare Access for WebUI and restricted OAuth exceptions? [y/N]: ").strip().lower() != "y":
         print("Not starting tunnel without Access policy acknowledgment.")
         return
@@ -406,7 +415,6 @@ def setup_cloudflare() -> None:
     os.chmod(target, 0o600)
     secret = ""  # never pass token as argv
     unit = Path("/etc/systemd/system/kali-mcp-cloudflared.service")
-    binary = shutil.which("cloudflared")
     unit.write_text(
         "[Unit]\nDescription=Kali MCP Cloudflare Tunnel\nAfter=network-online.target\n"
         "Wants=network-online.target\n[Service]\nType=simple\nUser=root\n"
