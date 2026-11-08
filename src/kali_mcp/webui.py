@@ -913,4 +913,9 @@ class UI:
                         "control-center.js"}:
             return Response(status_code=404)
         return FileResponse(Path(__file__).resolve().parent / "static" / name,
-                            headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+                            headers={
+                                # JS/CSS change between beta releases. Never serve
+                                # a stale bundle across a Core self-upgrade.
+                                "Cache-Control": ("private, no-store" if name.startswith("control-center")
+                                                  else "private, max-age=3600"),
+                                "X-Content-Type-Options": "nosniff"})
