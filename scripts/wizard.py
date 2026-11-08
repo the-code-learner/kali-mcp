@@ -239,6 +239,9 @@ def configure(path: Path, gid: int, *, interactive: bool, host_user: str = "kali
     if len(origins) > 12 or len(set(origins)) != len(origins) or any(
             not valid_origin(o) for o in origins):
         raise ValueError("MCP browser origins must be exact HTTPS/localhost origins")
+    # Invalidate any old success marker before replacing credentials/config.
+    # A crash during reconfiguration must never look like a completed setup.
+    (path / "config.ready").unlink(missing_ok=True)
     username = setup_superuser(path, old, interactive=interactive)
     shared = {
         "KALI_MCP_PUBLIC_URL": origin,
