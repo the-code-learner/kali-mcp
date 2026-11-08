@@ -138,12 +138,17 @@ def write_private(path: Path, data: dict[str, str] | str) -> None:
             os.unlink(temporary)
 
 
-def is_complete(path: Path) -> bool:
-    """A marker is valid only with all expected credentials/environment files."""
+def is_complete(path: Path, *, require_marker: bool = True) -> bool:
+    """Verify a complete configuration, optionally recognizing pre-marker betas.
+
+    Only the installer migration path may omit the marker. It never repairs
+    incomplete or insecure config, never changes a credential or ceiling.
+    """
     try:
-        marker = path / "config.ready"
-        if marker.read_text(encoding="utf-8") != "v1\n":
-            return False
+        if require_marker:
+            marker = path / "config.ready"
+            if marker.read_text(encoding="utf-8") != "v1\\n":
+                return False
         stack, agent = parse_env(path / "stack.env"), parse_env(path / "agent.env")
         read_record(path / "superuser.json")
         required = ("KALI_MCP_PUBLIC_URL", "KALI_MCP_RELEASE_CHANNEL",
@@ -159,7 +164,10 @@ def is_complete(path: Path) -> bool:
             return False
         if not (agent.get("KALI_MCP_SUPERUSER_FILE") == "/etc/kali-mcp/superuser.json"):
             return False
-        for filename in ("config.ready", "stack.env", "agent.env", "superuser.json"):
+        names = ("stack.env", "agent.env", "superuser.json")
+        if require_marker:
+            names = ("config.ready", *names)
+        for filename in names:
             item = path / filename
             if not item.is_file() or item.stat().st_mode & 0o077:
                 return False
@@ -294,10 +302,25 @@ def main() -> None:
     parser.add_argument("--host-user", default="kali")
     parser.add_argument("--verify", action="store_true",
                         help="Exit 0 only for a committed complete configuration")
+    parser.add_argument("--migrate-legacy", action="store_true",
+                        help="Write only a completion marker for verified pre-marker beta configuration")
     parser.add_argument("--non-interactive", action="store_true")
     args = parser.parse_args()
+    if args.verify and args.migrate_legacy:
+        parser.error("--verify and --migrate-legacy are mutually exclusive")
     if args.verify:
         raise SystemExit(0 if is_complete(Path(args.config_dir)) else 1)
+    if args.migrate_legacy:
+        old = Path(args.config_dir)
+        marker = old / "config.ready"
+        if marker.exists() or not is_complete(old, require_marker=False):
+            raise SystemExit("Refusing to migrate incomplete legacy config or overwrite existing marker")
+        write_private(marker, "v1\\n")
+        if not is_complete(old):
+            marker.unlink(missing_ok=True)
+            raise SystemExit("Migration post-check failed")
+        print("Validated and committed legacy beta configuration without changing credentials or settings.")
+        return
     if args.agent_gid <= 0:
         parser.error("--agent-gid is required for configuration")
     configure(Path(args.config_dir), args.agent_gid,
