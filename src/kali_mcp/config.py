@@ -29,6 +29,7 @@ class Config:
     repo: str
     check_interval: int
     max_job_seconds: int
+    browser_origins: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -44,6 +45,18 @@ class Config:
         interval = int(os.getenv("KALI_MCP_UPDATE_CHECK_SECONDS", "21600"))
         if interval < 900:
             raise ValueError("Update interval must be >= 900 seconds")
+        browser_origins = tuple(o.strip() for o in
+            os.getenv("KALI_MCP_BROWSER_ORIGINS", "").split(",") if o.strip())
+        if len(browser_origins) > 12 or len(set(browser_origins)) != len(browser_origins):
+            raise ValueError("Too many or duplicate MCP browser origins")
+        for origin in browser_origins:
+            item = urlparse(origin)
+            if (origin in {"null", "*"} or not item.hostname or item.username or
+                    item.password or item.path or item.query or item.fragment or
+                    item.scheme not in {"http", "https"} or
+                    (item.scheme == "http" and item.hostname not in
+                     {"localhost", "127.0.0.1", "::1"})):
+                raise ValueError("KALI_MCP_BROWSER_ORIGINS requires exact HTTPS origins")
         return cls(
             base_url=url,
             data_dir=Path(os.getenv("KALI_MCP_DATA_DIR", "/data")),
@@ -61,6 +74,7 @@ class Config:
             repo=os.getenv("KALI_MCP_REPO", "the-code-learner/kali-mcp"),
             check_interval=interval,
             max_job_seconds=max(5, min(3600, int(os.getenv("KALI_MCP_MAX_JOB_SECONDS", "300")))),
+            browser_origins=browser_origins,
         )
 
     @property
