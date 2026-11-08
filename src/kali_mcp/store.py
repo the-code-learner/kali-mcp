@@ -273,7 +273,7 @@ class Store:
         with self.lock:
             return [dict(row) for row in self.db.execute("""
                 SELECT token_id,name,resource,scope,allowed_tools,created_at,expires,
-                       last_used,revoked FROM api_tokens ORDER BY created_at DESC LIMIT ?""",
+                       last_used,revoked FROM api_tokens ORDER BY created_at DESC, rowid DESC LIMIT ?""",
                 (max(1, min(limit, 200)),))]
 
     def revoke_api_token(self, token_id: str, *, actor: str = "webui") -> bool:
