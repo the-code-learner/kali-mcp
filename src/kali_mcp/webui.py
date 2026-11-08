@@ -408,7 +408,7 @@ class UI:
            <th>Last used</th><th>Tools</th><th>Action</th></tr></thead><tbody>{api_rows}</tbody></table>
          </section>
          <section><h2>Audit</h2><pre id="audit">Loading ...</pre></section>
-        </main><script src="/static/app.js" defer></script></body></html>"""
+        </main><script src="/static/app.js?v={html.escape(installed or 'unknown', quote=True)}" defer></script></body></html>"""
         return HTMLResponse(body, headers={"Cache-Control": "no-store",
             "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'",
             "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer"})
