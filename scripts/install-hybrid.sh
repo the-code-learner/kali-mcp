@@ -215,6 +215,27 @@ for uid, gid in ((10001, 10001), (pwd.getpwnam(host_user).pw_uid, pwd.getpwnam(h
         raise SystemExit(f"Release not readable by uid {uid}; check staging permissions")
 PY
 echo "Staged version: $SELECTED"
+phase backup
+# SQLite online backup preserves WAL-consistent job, OAuth and configuration data.
+# Backups are root-only and never silently deleted during rollback/upgrade.
+if test -f "$STATE/core/app.db"; then
+  install -d -m 0700 "$STATE/backups"
+  BACKUP="$STATE/backups/app-$(date -u +%Y%m%dT%H%M%SZ)-$.sqlite"
+  KALI_MCP_DB_SOURCE="$STATE/core/app.db" KALI_MCP_DB_BACKUP="$BACKUP" python3 - <<'PY'
+import os, sqlite3
+source = sqlite3.connect("file:" + os.environ["KALI_MCP_DB_SOURCE"] + "?mode=ro", uri=True)
+dest = sqlite3.connect(os.environ["KALI_MCP_DB_BACKUP"])
+try:
+    source.backup(dest)
+finally:
+    dest.close()
+    source.close()
+os.chmod(os.environ["KALI_MCP_DB_BACKUP"], 0o600)
+PY
+  sha256sum "$BACKUP" > "$BACKUP.sha256"
+  chmod 0600 "$BACKUP.sha256"
+  echo "Created SQLite upgrade safety backup: $BACKUP"
+fi
 phase wizard
 OLD_SUPERUSER_FINGERPRINT="absent"
 if test -f "$CONFIG/superuser.json"; then
