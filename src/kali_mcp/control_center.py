@@ -79,6 +79,14 @@ async def snapshot(ui, request):
     oauth = [{"name": row["name"], "id": row["client_id"],
               "status": "Attivo" if row["active"] else "Revocato / scaduto"}
              for row in ui.store.list_clients(100)]
+    # Ping can fail transiently even when another authenticated IPC call
+    # returns. Distinguish the reachability of Agent from its settings inventory.
+    agent_online = any(isinstance(item, dict) and item.get("ok") for item in
+                       (agent, inventory, cors, upgrade))
+    inventory_available = bool(inventory.get("ok")) and all(
+        any(field.get("name") == key for field in fields)
+        for key in ("KALI_MCP_ALLOWED_CIDRS", "KALI_MCP_DENIED_CIDRS",
+                    "KALI_MCP_ALLOW_ALL_TARGETS"))
     fields = inventory.get("fields", []) if inventory.get("ok") else []
     # The deployment inventory comes exclusively from the root Native Agent.
     # If it is unavailable show the full setting schema with *unavailable*
@@ -99,17 +107,6 @@ async def snapshot(ui, request):
             for name, desc in READONLY_REASONS.items()
         ]
     configured = cors.get("configured", []) if cors.get("ok") else []
-    # Ping can occasionally time out while another IPC request succeeds.
-    # Report Agent health from all authoritative IPC responses instead of
-    # showing a false "offline" badge on one failed ping. Inventory has its
-    # own availability flag: a reachable Agent alone is not evidence that the
-    # scope configuration was read successfully.
-    agent_online = any(item.get("ok") for item in
-                       (agent, inventory, cors, upgrade))
-    inventory_available = bool(inventory.get("ok")) and all(
-        any(field.get("name") == key for field in fields)
-        for key in ("KALI_MCP_ALLOWED_CIDRS", "KALI_MCP_DENIED_CIDRS",
-                    "KALI_MCP_ALLOW_ALL_TARGETS"))
     return JSONResponse({
         "ok": True,
         "core": {"online": True, "version": installed},
