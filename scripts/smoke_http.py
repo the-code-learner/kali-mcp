@@ -91,7 +91,9 @@ def main():
         "resource": resource,
     })
     assert exchanged.status == 200, exchanged.read()
-    token = json.load(exchanged)["access_token"]
+    auth_tokens = json.load(exchanged)
+    token = auth_tokens["access_token"]
+    refresh_token = auth_tokens["refresh_token"]
     # Cloudflare/browser HTTPS requests usually omit :443 from the Host
     # header. The SDK must accept a bare Host as well as a Host:port value.
     bare_host = os.getenv("KALI_MCP_SMOKE_HOST", urlsplit(base).hostname or "localhost")
@@ -134,6 +136,26 @@ def main():
     # Legacy Docker smoke intentionally pins an older published release. Only
     # hybrid beta candidate smoke opts into the new API-token endpoints.
     if os.getenv("KALI_MCP_SMOKE_TEST_API_TOKENS", "").lower() == "true":
+        # Refresh the OAuth PKCE authorization before independently testing
+        # API keys on the same endpoint; refresh replay must revoke its family.
+        rotated = post("/token", {"grant_type": "refresh_token",
+            "refresh_token": refresh_token, "client_id": client_id,
+            "resource": resource})
+        assert rotated.status == 200, rotated.read()
+        refreshed_access = json.load(rotated)["access_token"]
+        refreshed_request = Request(base + "/mcp", data=json.dumps({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {},
+        }).encode(), method="POST", headers={
+            "Host": bare_host, "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "Authorization": "Bearer " + refreshed_access,
+            "MCP-Protocol-Version": "2025-06-18",
+        })
+        assert opener.open(refreshed_request, timeout=30).status == 200
+        replayed = post("/token", {"grant_type": "refresh_token",
+            "refresh_token": refresh_token, "client_id": client_id,
+            "resource": resource})
+        assert replayed.status == 400, replayed.read()
         # Verify real ASGI MCP SDK flow for API credentials on the SAME /mcp.
         page = get("/")
         assert page.status == 200, page.read()
