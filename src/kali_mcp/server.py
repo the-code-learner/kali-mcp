@@ -244,17 +244,27 @@ def updates_install(tag: str) -> dict:
 @mcp.tool()
 def files_upload(name: str, mode: str = "base64", data_base64: str = "",
                  size_bytes: int = 0, mime_type: str = "application/octet-stream") -> dict:
-    """Receive a file from this MCP client into its own isolated transfer workspace.
+    """Upload a file from this authenticated client, 100 MB max.
 
-    Base64 mode: provide data_base64 (max 256 KiB).
-    OpenLink mode: provide the exact size_bytes (max 8 MiB); receive a signed
-    one-time HTTPS upload URL and send the file with an HTTP PUT.
-    Neither method can write arbitrary host paths or enable host/root access.
+    OpenLink: set mode=openlink, size_bytes=exact size; PUT raw bytes to the
+    one-use signed HTTPS URL, streaming without a large MCP JSON payload.
+
+    Base64: up to 128 KiB can be sent inline with data_base64. For larger
+    files (up to 100 MB), set mode=base64, size_bytes=total and omit
+    data_base64; then call files_upload_chunk in strict offset order and
+    files_upload_finish to verify size/checksum.
+    No method grants arbitrary host filesystem access or root privileges.
     """
     def compute():
         owner = actor()
         if mode == "base64":
-            return vault.put_base64(owner, name, mime_type, data_base64)
+            if data_base64:
+                if size_bytes:
+                    raise TransferError("For inline Base64, omit size_bytes")
+                return vault.put_base64(owner, name, mime_type, data_base64)
+            if size_bytes:
+                return vault.begin_base64(owner, name, mime_type, size_bytes)
+            return vault.put_bytes(owner, name, mime_type, b"")
         if mode == "openlink":
             if data_base64:
                 raise TransferError("Use size_bytes, not data_base64, for OpenLink uploads")
@@ -264,14 +274,32 @@ def files_upload(name: str, mode: str = "base64", data_base64: str = "",
 
 
 @mcp.tool()
-def files_download(file_id: str, mode: str = "openlink") -> dict:
-    """Send a file previously uploaded by this same MCP client.
+def files_upload_chunk(file_id: str, offset: int, data_base64: str) -> dict:
+    """Append one Base64 chunk of at most 128 KiB to this client's pending file.
 
-    OpenLink returns a short-lived one-time HTTPS download link.
-    Base64 embeds the content in a JSON field (max 256 KiB).
-    No MCP client may read another client's files or host filesystem paths.
+    Offset is the raw-byte position (not Base64 characters). Repeat until
+    remaining=0, then call files_upload_finish. Total size may reach 100 MB.
     """
-    return safe_call(vault.get_file, actor(), file_id, mode)
+    return safe_call(vault.append_base64, actor(), file_id, offset, data_base64)
+
+
+@mcp.tool()
+def files_upload_finish(file_id: str) -> dict:
+    """Commit a complete chunked Base64 upload after streaming SHA-256 validation."""
+    return safe_call(vault.finish_base64, actor(), file_id)
+
+
+@mcp.tool()
+def files_download(file_id: str, mode: str = "openlink",
+                   offset: int = 0, max_bytes: int = MAX_BASE64_FILE) -> dict:
+    """Transfer a client-owned file, up to 100 MB.
+
+    OpenLink gives a 10-minute, one-use HTTPS link for streamed download.
+    Base64 returns up to 128 KiB per call and a next_offset; continue until
+    done=true. Verify the final file's SHA-256. Only the owning MCP client
+    can retrieve metadata or mint new download capabilities.
+    """
+    return safe_call(vault.get_file, actor(), file_id, mode, offset, max_bytes)
 
 
 @mcp.tool()
