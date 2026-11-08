@@ -203,7 +203,8 @@ class SecurityGate:
                                         "/api/v1/settings", "/api/v1/clients/revoke", "/api/v1/updates/check",
                                         "/api/v1/updates/install", "/api/v1/api-tokens/create",
                                         "/api/v1/api-tokens/revoke", "/api/v1/api-tokens/rotate",
-                                        "/api/v1/browser-origins", "/api/v1/browser-origins/check"}:
+                                        "/api/v1/browser-origins", "/api/v1/browser-origins/check",
+                                         "/settings/deployment"}:
             admin_origins = {cfg.base_url, "http://localhost:8787", "http://127.0.0.1:8787"}
             referrer = headers.get("referer", "")
             referer_ok = any(referrer.startswith(base + "/") for base in admin_origins)
@@ -455,6 +456,8 @@ app = SecurityGate(Starlette(
         Route("/", ui.dashboard, methods=["GET"]),
         Route("/api/v1/status", ui.status, methods=["GET"]),
         Route("/api/v1/settings", ui.settings, methods=["POST"]),
+        Route("/settings/deployment", ui.deployment_settings, methods=["GET"]),
+        Route("/settings/deployment", ui.deployment_settings_save, methods=["POST"]),
         Route("/api/v1/clients/revoke", ui.revoke_client, methods=["POST"]),
         Route("/api/v1/api-tokens/create", ui.create_api_token, methods=["POST"]),
         Route("/api/v1/api-tokens/revoke", ui.revoke_api_token, methods=["POST"]),
