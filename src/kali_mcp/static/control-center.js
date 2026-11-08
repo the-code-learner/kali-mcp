@@ -92,6 +92,7 @@ const LIVE_PHASES = ['scheduled','preflight','download','verify','backup',
 const CSRF = document.querySelector('meta[name="kali-csrf"]')?.content || '';
 let livePending = null;
 let liveRefreshTimer = null;
+let liveJobOpened = false;
 let lastSnapshot = null;
 let liveJobId = null;
 state.hasSnapshot = false;
@@ -382,7 +383,10 @@ async function refreshLive(){
    if(!response.ok)throw new Error('HTTP '+response.status);
    const json=await response.json(); if(!json.ok)throw Error('Snapshot non disponibile');
    applyLive(json);
-   if(liveJobId)await refreshJobDetails(liveJobId,false);
+   if(liveJobId){
+     await refreshJobDetails(liveJobId,!liveJobOpened);
+     liveJobOpened=true;
+   }
  }catch(err){
    state.serverError='Riconnessione: '+String(err.message||'server non raggiungibile');
    state.coreOnline=false;markConnection(false);
@@ -648,7 +652,7 @@ function liveAction(action,el){
  if(action==='job-detail'){
    const id=el?.dataset.job;
    if(!/^[0-9a-f]{32}$/.test(id||''))return toast('ID job non valido.','bad');
-   liveJobId=id;return void refreshJobDetails(id,true);
+   liveJobId=id;liveJobOpened=true;return void refreshJobDetails(id,true);
  }
  if(action==='error-demo')return goto('lab');
  if(action==='logout')return void postLive('/logout',{});
