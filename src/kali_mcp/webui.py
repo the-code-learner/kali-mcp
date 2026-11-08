@@ -355,7 +355,7 @@ class UI:
                 '<input type="password" name="password" placeholder="Superuser password" required>'
                 '<button type="submit">Rotate</button></form>') if not t["revoked"] else "")
             + "</td></tr>" for t in self.store.list_api_tokens(100))
-        latest = self.updates.status().get("latest")
+        latest = (self.updates.status() if self.updates is not None else {}).get("latest")
         installed = installed_release_tag()
         comparison = is_update_available(installed, latest)
         upgrade_allowed, upgrade_guidance = self._upgrade_gate()
@@ -363,7 +363,7 @@ class UI:
             upgrade_guidance = "This Core already has the newest eligible GitHub release."
         elif comparison is None and upgrade_allowed:
             upgrade_guidance = ("A newer release cannot be confirmed yet. Click Check now to refresh.")
-        install_disabled = "" if upgrade_allowed and comparison is True and not self.updates.status().get("error") else " disabled"
+        install_disabled = "" if upgrade_allowed and comparison is True and not (self.updates.status() if self.updates is not None else {}).get("error") else " disabled"
 
         body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
         <title>Kali MCP — Dashboard</title><link rel="stylesheet" href="/static/app.css"></head><body>
