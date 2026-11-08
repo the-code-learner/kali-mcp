@@ -98,4 +98,4 @@ def test_public_http_limits_and_response_headers(tmp_path, monkeypatch):
         response = client.post("/login", data={"x":"y"})
         assert response.headers["x-content-type-options"] == "nosniff"
         assert response.headers["x-frame-options"] == "DENY"
-        assert response.headers["referrer-policy"] == "no-referrer"
+        assert response.headers["referrer-policy"] == "same-origin"

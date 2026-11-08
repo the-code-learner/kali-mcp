@@ -10,12 +10,16 @@ CHANNEL="${KALI_MCP_RELEASE_CHANNEL:-beta}"
 REF="${KALI_MCP_VERSION:-latest}"
 NONINTERACTIVE=false
 RECONFIGURE=false
+RESUME=false
+REPAIR=false
+UPGRADE=false
+PHASE=preflight
 OLD=""
 ACTIVATED=false
 
 usage() {
   printf '%s\n' \
-    'Usage: sudo bash install-hybrid.sh [--non-interactive] [--reconfigure] [--upgrade]' \
+    'Usage: sudo bash install-hybrid.sh [--non-interactive] [--resume|--repair|--reconfigure|--upgrade]' \
     'Environment: KALI_MCP_RELEASE_CHANNEL=beta|stable, KALI_MCP_VERSION=latest|vX.Y.Z-beta.N' \
     'Once installed: sudo kali-mcp (SSH dashboard)'
 }
@@ -23,13 +27,32 @@ for arg in "$@"; do
   case "$arg" in
     --non-interactive) NONINTERACTIVE=true ;;
     --reconfigure) RECONFIGURE=true ;;
-    --upgrade) : ;;
+    --resume) RESUME=true ;;
+    --repair) REPAIR=true ;;
+    --upgrade) UPGRADE=true ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument $arg" >&2; exit 2 ;;
   esac
 done
 
 test "$EUID" = "0" || { echo 'Installer requires sudo' >&2; exit 1; }
+install -d -m 0700 /var/log/kali-mcp
+LOG=/var/log/kali-mcp/install.log
+touch "$LOG"
+chmod 0600 "$LOG"
+phase() {
+  PHASE="$1"
+  printf '%s phase=%s\n' "$(date -u +%FT%TZ)" "$PHASE" >> "$LOG"
+}
+on_error() {
+  local code="$1" line="$2"
+  printf '%s FAILED phase=%s line=%s exit=%s\n' "$(date -u +%FT%TZ)" "$PHASE" "$line" "$code" >> "$LOG"
+  echo "Install failed in phase '$PHASE' (line $line, exit $code)." >&2
+  echo "Review /var/log/kali-mcp/install.log; rerun with --resume or --repair." >&2
+  exit "$code"
+}
+trap 'on_error "$?" "$LINENO"' ERR
+phase preflight
 command -v systemctl >/dev/null && test -d /run/systemd/system ||
   { echo 'systemd as PID 1 is required' >&2; exit 1; }
 case "$(uname -m)" in aarch64|x86_64) : ;; *) echo 'ARM64 or AMD64 required' >&2; exit 1 ;; esac
@@ -67,6 +90,10 @@ else
   fi
 fi
 install -d -m 0700 "$CONFIG"
+command -v flock >/dev/null || { echo 'flock (util-linux) is required' >&2; exit 1; }
+exec 9>"$CONFIG/.install.lock"
+flock -n 9 || { echo 'Another Kali MCP installation is in progress' >&2; exit 1; }
+phase prerequisites
 install -d -m 0755 "$ROOT" "$ROOT/releases"
 install -d -m 0750 -o 10001 -g 10001 "$STATE/core" "$STATE/venv"
 install -d -m 0750 -o root -g 10001 "$STATE/auth"
@@ -77,7 +104,8 @@ if docker ps --format '{{.Names}}' | grep -Fxq kali-mcp-broker; then
   exit 1
 fi
 
-echo 'Downloading staged GitHub source release (validated archive)'
+phase staging
+ echo 'Downloading staged GitHub source release (validated archive)'
 SELECTED="$(
   KALI_SOURCE_ROOT="$ROOT" KALI_SOURCE_REPO="$REPO" \
   KALI_SOURCE_REF="$REF" KALI_SOURCE_CHANNEL="$CHANNEL" python3 - <<'PY'
@@ -153,7 +181,10 @@ try:
     for entry in needed:
         if not (stage/entry).is_file(): raise RuntimeError("Hybrid component missing: "+entry)
     (stage/".source-ready").write_text(ref+"\n",encoding="utf-8")
-    stage.chmod(0o755)
+    # mkdir() inherited root's restrictive umask (often 077): explicitly
+    # normalize *only* code-directory traversal, never secrets in /etc or /var.
+    for directory in (stage, *(p for p in stage.rglob("*") if p.is_dir())):
+        directory.chmod(0o755)
     stage.rename(target)
 finally:
     shutil.rmtree(stage,ignore_errors=True)
@@ -161,26 +192,85 @@ print(ref)
 PY
 )"
 TARGET="$ROOT/releases/$SELECTED"
+# Revalidate permissions on existing staged releases from earlier beta installers.
+find "$TARGET" -type d -exec chmod 0755 {} +
+chmod 0755 "$ROOT" "$ROOT/releases"
+python3 - "$TARGET" "$HOST_USER" <<'PY'
+import os, pwd, sys
+path, host_user = sys.argv[1:]
+for uid, gid in ((10001, 10001), (pwd.getpwnam(host_user).pw_uid, pwd.getpwnam(host_user).pw_gid)):
+    pid = os.fork()
+    if pid == 0:
+        try:
+            os.setgroups([])
+            os.setgid(gid)
+            os.setuid(uid)
+            with open(os.path.join(path, "src/kali_mcp/runtime.py"), "rb") as source:
+                source.read(1)
+        except (OSError, PermissionError):
+            os._exit(1)
+        os._exit(0)
+    _, status = os.waitpid(pid, 0)
+    if not os.WIFEXITED(status) or os.WEXITSTATUS(status):
+        raise SystemExit(f"Release not readable by uid {uid}; check staging permissions")
+PY
 echo "Staged version: $SELECTED"
+phase backup
+# SQLite online backup preserves WAL-consistent job, OAuth and configuration data.
+# Backups are root-only and never silently deleted during rollback/upgrade.
+if test -f "$STATE/core/app.db"; then
+  install -d -m 0700 "$STATE/backups"
+  BACKUP="$STATE/backups/app-$(date -u +%Y%m%dT%H%M%SZ)-$.sqlite"
+  KALI_MCP_DB_SOURCE="$STATE/core/app.db" KALI_MCP_DB_BACKUP="$BACKUP" python3 - <<'PY'
+import os, sqlite3
+source = sqlite3.connect("file:" + os.environ["KALI_MCP_DB_SOURCE"] + "?mode=ro", uri=True)
+dest = sqlite3.connect(os.environ["KALI_MCP_DB_BACKUP"])
+try:
+    source.backup(dest)
+finally:
+    dest.close()
+    source.close()
+os.chmod(os.environ["KALI_MCP_DB_BACKUP"], 0o600)
+PY
+  sha256sum "$BACKUP" > "$BACKUP.sha256"
+  chmod 0600 "$BACKUP.sha256"
+  echo "Created SQLite upgrade safety backup: $BACKUP"
+fi
+phase wizard
 OLD_SUPERUSER_FINGERPRINT="absent"
 if test -f "$CONFIG/superuser.json"; then
   OLD_SUPERUSER_FINGERPRINT="$(sha256sum "$CONFIG/superuser.json" | cut -d' ' -f1)"
 fi
-if test ! -f "$CONFIG/stack.env" || test ! -f "$CONFIG/superuser.json" || test "$RECONFIGURE" = true; then
+VERIFY=(python3 "$TARGET/scripts/wizard.py" --config-dir "$CONFIG" --verify)
+if ! "${VERIFY[@]}"; then
+  if test "$NONINTERACTIVE" = false && test "$RECONFIGURE" = false &&
+     test "$REPAIR" = false && test "$RESUME" = false && test "$UPGRADE" = false &&
+     test -f "$CONFIG/superuser.json"; then
+    echo 'Incomplete setup detected (no valid completion marker).'
+    echo '  [r] Resume using existing credentials  [f] Repair  [c] Reconfigure  [q] Quit'
+    read -r -p 'Choice [r]: ' choice
+    case "${choice:-r}" in
+      r|R) RESUME=true ;;
+      f|F) REPAIR=true ;;
+      c|C) RECONFIGURE=true ;;
+      *) exit 1 ;;
+    esac
+  fi
+fi
+if test "$RECONFIGURE" = true || ! "${VERIFY[@]}"; then
+  flags=(--config-dir "$CONFIG" --agent-gid "$GID" --host-user "$HOST_USER")
   if test "$NONINTERACTIVE" = true; then
-    python3 "$TARGET/scripts/wizard.py" --config-dir "$CONFIG" --agent-gid "$GID" --non-interactive
+    flags+=(--non-interactive)
   else
     test -t 0 || { echo 'Interactive SSH TTY required (or use --non-interactive)' >&2; exit 1; }
-    python3 "$TARGET/scripts/wizard.py" --config-dir "$CONFIG" --agent-gid "$GID"
   fi
+  python3 "$TARGET/scripts/wizard.py" "${flags[@]}"
 else
-  echo 'Reusing stored settings. Use --reconfigure to launch the wizard again.'
+  echo 'Reusing committed settings. Use --reconfigure to run the wizard.'
 fi
-sed -i "s/^KALI_MCP_HOST_USER=.*/KALI_MCP_HOST_USER=$HOST_USER/" "$CONFIG/agent.env"
-if ! grep -q "^KALI_MCP_HOST_USER=" "$CONFIG/agent.env"; then
-  echo "KALI_MCP_HOST_USER=$HOST_USER" >> "$CONFIG/agent.env"
-fi
-chmod 0600 "$CONFIG"/*.env "$CONFIG/superuser.json"
+"${VERIFY[@]}" || { echo 'Wizard did not produce a complete configuration' >&2; exit 1; }
+chmod 0600 "$CONFIG"/*.env "$CONFIG/superuser.json" "$CONFIG/config.ready"
+phase credentials
 # Keep the canonical superuser hash root-only. Core receives an immutable,
 # read-only copy; the Core never receives the password through Docker env.
 install -m 0640 -o root -g 10001 "$CONFIG/superuser.json" "$STATE/auth/superuser.json"
@@ -198,6 +288,8 @@ try:
     db.execute("PRAGMA busy_timeout=20000")
     with db:
         db.execute("UPDATE oauth_tokens SET revoked=1")
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='api_tokens'").fetchone():
+            db.execute("UPDATE api_tokens SET revoked=1")
         db.execute("DELETE FROM oauth_codes")
         db.execute("DELETE FROM admin_sessions")
 finally:
@@ -208,7 +300,8 @@ PY
   done
 fi
 
-echo 'Installing native Agent Python dependencies'
+phase native-dependencies
+ echo 'Installing native Agent Python dependencies'
 if test ! -x "$ROOT/agent-venv/bin/python"; then python3 -m venv "$ROOT/agent-venv"; fi
 "$ROOT/agent-venv/bin/python" -m pip install --disable-pip-version-check \
   -r "$TARGET/broker-requirements.txt"
@@ -222,6 +315,8 @@ fi
 rollback() {
   code=$?
   trap - ERR
+  printf '%s FAILED phase=%s exit=%s\n' "$(date -u +%FT%TZ)" "$PHASE" "$code" >> "$LOG"
+  echo "Activation failed in phase '$PHASE'; retry with --repair" >&2
   if test "$ACTIVATED" = true && test -n "$OLD" && test -d "$OLD"; then
     echo "Activation failed; restoring previous release: $OLD" >&2
     ln -sfn "$OLD" "$ROOT/.rollback-link"
@@ -233,6 +328,7 @@ rollback() {
   exit "$code"
 }
 trap rollback ERR
+phase activation
 ln -sfn "$TARGET" "$ROOT/.next-link"
 mv -Tf "$ROOT/.next-link" "$ROOT/current"
 ACTIVATED=true
@@ -256,14 +352,15 @@ for count in 1 2 3 4 5 6 7 8 9 10; do
 done
 test -S /run/kali-mcp-agent/agent.sock
 docker compose --env-file "$CONFIG/stack.env" -f "$ROOT/current/kali-mcp-hybrid.yml" config --quiet
+phase healthcheck
 docker compose --env-file "$CONFIG/stack.env" -f "$ROOT/current/kali-mcp-hybrid.yml" \
   up -d --force-recreate --wait --wait-timeout 300
 ACTIVATED=false
 trap - ERR
 echo
 echo "Kali MCP hybrid installation successful: $SELECTED"
-echo '  sudo kali-mcp          interactive SSH dashboard'
-echo '  sudo kali-mcp status   systemd, Docker and MCP URL'
-echo '  sudo kali-mcp access   guided Cloudflare/Tailscale setup'
+echo '  sudo /usr/local/bin/kali-mcp          interactive SSH dashboard'
+echo '  sudo /usr/local/bin/kali-mcp status   systemd, Docker and MCP URL'
+echo '  sudo /usr/local/bin/kali-mcp access   guided Cloudflare/Tailscale setup'
 echo '  WebUI: http://localhost:8787 (local or SSH tunnel)'
 echo 'Root is OFF until explicit administrator permission.'

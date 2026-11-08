@@ -32,6 +32,8 @@ services:
       MCP_HOST: "0.0.0.0"
       MCP_PORT: "8000"
       KALI_MCP_PUBLIC_URL: "${KALI_MCP_PUBLIC_URL:-http://localhost:8787}"
+      KALI_MCP_BROWSER_ORIGINS: "${KALI_MCP_BROWSER_ORIGINS:-}"
+      KALI_MCP_API_HEADER_ENABLED: "${KALI_MCP_API_HEADER_ENABLED:-true}"
       KALI_MCP_SUPERUSER_FILE: "/run/secrets/kali-mcp-superuser.json"
       KALI_MCP_REPO: "the-code-learner/kali-mcp"
       KALI_MCP_RELEASE_CHANNEL: "${KALI_MCP_RELEASE_CHANNEL:-beta}"

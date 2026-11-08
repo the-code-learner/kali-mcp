@@ -20,7 +20,7 @@ from .broker_client import BrokerError, call
 from .config import Config
 from .store import Store
 from .releases import UpdateChecker
-from .superuser import DEFAULT_HOST_FILE, read_record, verify
+from .superuser import DEFAULT_HOST_FILE, read_record, record_fingerprint, verify
 
 ROOT = Path("/opt/kali-mcp")
 ETC = Path("/etc/kali-mcp")
@@ -169,6 +169,78 @@ def revoke_client(client_id: str) -> None:
             print("No such client")
         else:
             print("MCP OAuth client tokens revoked:", client_id)
+    finally:
+        store.close()
+        _restore_core_sqlite_owner()
+
+
+def api_tokens_list() -> None:
+    store = data_store()
+    try:
+        print("API TOKEN CLIENTS (no secrets retained)")
+        for row in store.list_api_tokens():
+            status = "revoked" if row["revoked"] else (
+                "expired" if row["expires"] <= int(time.time()) else "active")
+            print(row["token_id"], row["name"][:36], status,
+                  time.strftime("%Y-%m-%d", time.gmtime(row["expires"])),
+                  "last_used=" + (str(row["last_used"]) if row["last_used"] else "never"))
+    finally:
+        store.close()
+        _restore_core_sqlite_owner()
+
+
+def api_token_create(name: str, days: int = 30, tools: str = "") -> None:
+    if not sys.stdout.isatty():
+        raise ValueError("Create API tokens in an interactive terminal; never redirect credentials to logs")
+    from .cli_config import parse_env
+    config = parse_env(ETC / "stack.env")
+    resource = config.get("KALI_MCP_PUBLIC_URL", "").rstrip("/") + "/mcp"
+    credential = read_record(ETC / "superuser.json")
+    store = data_store()
+    try:
+        token_id, token = store.create_api_token(
+            name, resource, record_fingerprint(credential), days=days,
+            allowed_tools=[part.strip() for part in tools.split(",") if part.strip()],
+            actor="cli:" + AUTH_USER)
+        print("Store the token now; it cannot be recovered later.")
+        print("Token ID:", token_id)
+        print("Bearer:", token)
+    finally:
+        store.close()
+        _restore_core_sqlite_owner()
+
+
+def api_token_revoke(token_id: str) -> None:
+    if input("Type REVOKE to invalidate this API token: ").strip() != "REVOKE":
+        print("Cancelled")
+        return
+    store = data_store()
+    try:
+        print("Revoked" if store.revoke_api_token(token_id, actor="cli:" + AUTH_USER)
+              else "Not found or already revoked")
+    finally:
+        store.close()
+        _restore_core_sqlite_owner()
+
+
+def api_token_rotate(token_id: str, days: int = 30) -> None:
+    if not sys.stdout.isatty():
+        raise ValueError("Rotate API tokens in an interactive terminal")
+    if input("Type ROTATE to revoke the prior token immediately: ").strip() != "ROTATE":
+        print("Cancelled")
+        return
+    from .cli_config import parse_env
+    config = parse_env(ETC / "stack.env")
+    resource = config.get("KALI_MCP_PUBLIC_URL", "").rstrip("/") + "/mcp"
+    credential = read_record(ETC / "superuser.json")
+    store = data_store()
+    try:
+        new_id, token = store.rotate_api_token(
+            token_id, resource, record_fingerprint(credential), days=days,
+            actor="cli:" + AUTH_USER)
+        print("Prior token revoked. Copy this new secret now (shown ONCE).")
+        print("New token ID:", new_id)
+        print("Bearer:", token)
     finally:
         store.close()
         _restore_core_sqlite_owner()
@@ -330,18 +402,27 @@ def setup_cloudflare() -> None:
     print("Keep the administrative WebUI protected by Cloudflare Access.")
     print("Check docs/CLOUDFLARE.md before enabling a public route.")
     if not shutil.which("cloudflared"):
-        if input("Install cloudflared from Cloudflare's signed apt repository? [y/N]: ").strip().lower() != "y":
+        print("cloudflared not installed; checking distribution-signed APT packages.")
+        if input("Try distribution APT cloudflared package? [y/N]: ").strip().lower() != "y":
             return
-        keys = Path("/usr/share/keyrings")
-        keys.mkdir(parents=True, exist_ok=True)
-        from urllib.request import urlopen
-        keydata = urlopen("https://pkg.cloudflare.com/cloudflare-main.gpg", timeout=20).read(2_000_000)
-        (keys / "cloudflare-main.gpg").write_bytes(keydata)
-        (keys / "cloudflare-main.gpg").chmod(0o644)
-        Path("/etc/apt/sources.list.d/cloudflared.list").write_text(
-            "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] "
-            "https://pkg.cloudflare.com/cloudflared any main\n")
-        apt_install("cloudflared")
+        try:
+            apt_install("cloudflared")
+        except (RuntimeError, subprocess.CalledProcessError, OSError) as error:
+            print("APT install failed (possibly GPG/repository/HTTP 403).")
+            print("MCP Core and Host Agent remain operational; access wizard can be retried.")
+            print("Install a verified official cloudflared package for this architecture,")
+            print("checking the publisher signature/checksum before dpkg -i, then return here.")
+            print("Reference: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/")
+            return
+    binary = shutil.which("cloudflared")
+    if not binary:
+        print("cloudflared executable not detected after installation; retry later.")
+        return
+    version = run(binary, "--version", capture=True)
+    if version.returncode:
+        print("cloudflared binary version check failed; refusing to enable tunnel.")
+        return
+    print(version.stdout.strip())
     if input("Configured Cloudflare Access for WebUI and restricted OAuth exceptions? [y/N]: ").strip().lower() != "y":
         print("Not starting tunnel without Access policy acknowledgment.")
         return
@@ -357,7 +438,6 @@ def setup_cloudflare() -> None:
     os.chmod(target, 0o600)
     secret = ""  # never pass token as argv
     unit = Path("/etc/systemd/system/kali-mcp-cloudflared.service")
-    binary = shutil.which("cloudflared")
     unit.write_text(
         "[Unit]\nDescription=Kali MCP Cloudflare Tunnel\nAfter=network-online.target\n"
         "Wants=network-online.target\n[Service]\nType=simple\nUser=root\n"
@@ -394,7 +474,7 @@ def refresh_dashboard() -> None:
     print("\nRECENT JOBS")
     show_jobs(8)
     print("\n  [j] jobs   [a] audit   [g] agent toggles   [r] remote access")
-    print("  [u] update check   [p] upgrade   [w] wizard   [s] services   [q] quit")
+    print("  [u] update check   [p] upgrade   [w] wizard   [s] services   [t] API tokens   [q] quit")
     print("Refreshes automatically every 5 seconds. Works over SSH.")
 
 
@@ -426,6 +506,17 @@ def dashboard() -> None:
             upgrade(reconfigure=True)
         elif option == "r":
             access_menu()
+        elif option == "t":
+            api_tokens_list()
+            action = input("Create / Revoke / Rotate / Back [c/r/o/b]: ").strip().lower()
+            if action == "c":
+                api_token_create(input("Client name: ").strip(),
+                                 int(input("Expires in days (1-90) [30]: ").strip() or "30"),
+                                 input("Allowed MCP tool names, comma-separated (blank=all): "))
+            elif action == "r":
+                api_token_revoke(input("Token ID: ").strip())
+            elif action == "o":
+                api_token_rotate(input("Token ID: ").strip())
         elif option == "g":
             caps = broker("settings_get")["settings"]
             print(caps)
@@ -449,6 +540,16 @@ def main() -> None:
     item.add_argument("job_id")
     sub.add_parser("audit")
     sub.add_parser("clients")
+    sub.add_parser("api-tokens")
+    create = sub.add_parser("api-token-create")
+    create.add_argument("name", help="Descriptive client name (not a secret)")
+    create.add_argument("--days", type=int, default=30)
+    create.add_argument("--tools", default="", help="Comma-separated MCP tool allowlist")
+    revoke_api = sub.add_parser("api-token-revoke")
+    revoke_api.add_argument("token_id")
+    rotate_api = sub.add_parser("api-token-rotate")
+    rotate_api.add_argument("token_id")
+    rotate_api.add_argument("--days", type=int, default=30)
     revoke = sub.add_parser("client-revoke")
     revoke.add_argument("client_id")
     sub.add_parser("access")
@@ -475,6 +576,14 @@ def main() -> None:
             show_audit(40)
         elif args.command == "clients":
             show_clients(40)
+        elif args.command == "api-tokens":
+            api_tokens_list()
+        elif args.command == "api-token-create":
+            api_token_create(args.name, args.days, args.tools)
+        elif args.command == "api-token-revoke":
+            api_token_revoke(args.token_id)
+        elif args.command == "api-token-rotate":
+            api_token_rotate(args.token_id, args.days)
         elif args.command == "client-revoke":
             revoke_client(args.client_id)
         elif args.command == "access":

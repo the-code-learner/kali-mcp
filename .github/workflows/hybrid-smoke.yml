@@ -34,6 +34,7 @@ jobs:
           sudo env KALI_MCP_VERSION="$SRC_REF" \
             KALI_MCP_ADMIN_PASSWORD=CI_HYBRID_PASSWORD_TEST_ONLY_2026 \
             KALI_MCP_ACCESS_MODE=local \
+            KALI_MCP_BROWSER_ORIGINS=https://llm.example.test \
             KALI_MCP_RELEASE_CHANNEL=beta \
             bash scripts/install-hybrid.sh --non-interactive
       - name: Prepare root-only CLI test credential
@@ -61,6 +62,14 @@ jobs:
           assert not any("KALI_MCP_ADMIN_PASSWORD=" in value for value in values)
           assert any("KALI_MCP_SUPERUSER_FILE=" in value for value in values)
           '
+          sudo test -f /etc/kali-mcp/config.ready
+          sudo test -f /etc/kali-mcp/stack.env
+          sudo test -f /etc/kali-mcp/agent.env
+          # Confirm a restrictive umask did not make the codeload release unreadable
+          # to the Docker Core uid or the host runner user.
+          sudo setpriv --reuid 10001 --regid 10001 --clear-groups \
+            test -r /opt/kali-mcp/current/src/kali_mcp/runtime.py
+          sudo test -f /var/log/kali-mcp/install.log
           sudo test -f /etc/kali-mcp/superuser.json
           sudo test "$(sudo stat -c '%a' /etc/kali-mcp/superuser.json)" = 600
           docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
@@ -94,6 +103,8 @@ jobs:
       - name: Verify OAuth consent and protected MCP tools/list
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: CI_HYBRID_PASSWORD_TEST_ONLY_2026
+          KALI_MCP_SMOKE_BROWSER_ORIGIN: https://llm.example.test
+          KALI_MCP_SMOKE_TEST_API_TOKENS: "true"
         run: python3 scripts/smoke_http.py
       - name: Verify idempotent upgrade preserves settings and recreates Core
         run: |
