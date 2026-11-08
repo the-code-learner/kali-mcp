@@ -95,10 +95,12 @@ def main():
     # Cloudflare/browser HTTPS requests usually omit :443 from the Host
     # header. The SDK must accept a bare Host as well as a Host:port value.
     bare_host = os.getenv("KALI_MCP_SMOKE_HOST", urlsplit(base).hostname or "localhost")
+    oauth_host = (bare_host if os.getenv("KALI_MCP_SMOKE_TEST_API_TOKENS", "").lower() == "true"
+                  else (urlsplit(base).netloc or bare_host))
     req = Request(base + "/mcp", data=json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {},
     }).encode(), method="POST", headers={
-        "Host": bare_host, "Content-Type": "application/json",
+        "Host": oauth_host, "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
         "Authorization": "Bearer " + token,
         "MCP-Protocol-Version": "2025-06-18",
@@ -116,7 +118,7 @@ def main():
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
         "params": {"name": "jobs_list", "arguments": {"limit": 1}},
     }).encode(), method="POST", headers={
-        "Host": bare_host, "Content-Type": "application/json",
+        "Host": oauth_host, "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
         "Authorization": "Bearer " + token,
         "MCP-Protocol-Version": "2025-06-18",
