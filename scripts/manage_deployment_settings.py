@@ -16,6 +16,8 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import socket
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -107,8 +109,23 @@ def activate(updates: dict[str, str]) -> None:
                        check=True, timeout=30)
         subprocess.run(["systemctl", "is-active", "--quiet", "kali-mcp-agent.service"],
                        check=True, timeout=15)
-        if not Path("/run/kali-mcp-agent/agent.sock").exists():
-            raise RuntimeError("Host Agent socket not restored")
+        # systemd Type=simple reports active before the Python Agent has
+        # bound its private Unix socket. Wait for actual IPC readiness; never
+        # turn a harmless startup race into a configuration rollback.
+        address = Path("/run/kali-mcp-agent/agent.sock")
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            if address.is_socket():
+                try:
+                    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                        connection.settimeout(1)
+                        connection.connect(str(address))
+                    break
+                except OSError:
+                    pass
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("Host Agent socket not ready after restart")
 
 
 def apply_changes(requested: dict[str, str]) -> None:
