@@ -287,6 +287,36 @@ class Store:
                 self._audit(actor, "api_token.revoke", "allow", token_id)
             return bool(changed)
 
+    def rotate_api_token(self, token_id: str, resource: str, issued_for: str, *,
+                         days: int = 30, actor: str = "webui") -> tuple[str, str]:
+        """Atomically revoke an existing key and issue its replacement.
+
+        The new key retains the exact resource, owner and tool allowlist. It is
+        shown once, never stored in plaintext, and has a fresh bounded lifetime.
+        """
+        if not re.fullmatch(r"[0-9a-f]{32}", token_id or ""):
+            raise ValueError("Invalid API token ID")
+        if not isinstance(days, int) or not 1 <= days <= 90:
+            raise ValueError("API token lifetime must be 1-90 days")
+        replacement_id = uuid4().hex
+        replacement = "kmp_" + replacement_id + "." + secrets.token_urlsafe(48)
+        now = int(time.time())
+        with self.transaction():
+            row = self.db.execute("SELECT * FROM api_tokens WHERE token_id=?",
+                                  (token_id,)).fetchone()
+            if (not row or row["revoked"] or row["resource"] != resource or
+                    not hmac.compare_digest(row["issued_for"], issued_for)):
+                raise ValueError("API token is unknown, revoked or no longer owned by this superuser")
+            self.db.execute("UPDATE api_tokens SET revoked=1 WHERE token_id=?", (token_id,))
+            self.db.execute("""
+                INSERT INTO api_tokens(token_id,name,token_hash,resource,scope,allowed_tools,
+                                       issued_for,created_at,expires)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (replacement_id, row["name"], digest(replacement), row["resource"],
+                 row["scope"], row["allowed_tools"], row["issued_for"], now, now + days * 86400))
+            self._audit(actor, "api_token.rotate", "allow", token_id + " -> " + replacement_id)
+        return replacement_id, replacement
+
     def close(self) -> None:
         with self.lock:
             self.db.close()
