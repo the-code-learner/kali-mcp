@@ -46,6 +46,8 @@ def test_webui_shows_installed_version_and_friendly_disabled_notice(tmp_path, mo
     monkeypatch.setenv("KALI_MCP_ALLOW_MCP_UPDATES", "true")
     monkeypatch.setenv("KALI_MCP_ADMIN_PASSWORD", "UNIT_TEST_SUPERUSER_PASSWORD_2026")
     cfg = Config.from_env()
+    # This test is invariant under future repository VERSION bumps.
+    monkeypatch.setattr("kali_mcp.webui.installed_release_tag", lambda: "v0.1.0-beta.5")
     store = Store(tmp_path / "ui.db")
     policy = Policy(cfg, store)
 
