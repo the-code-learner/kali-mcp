@@ -82,12 +82,16 @@ class Admin:
         nxt = str(request.query_params.get("next", "/"))
         if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
             nxt = "/"
+        session_notice = ("<p role=\"alert\">Your administrator session has expired or is no longer valid. "
+                          "Please sign in again, then return to the dashboard and repeat your change.</p>"
+                          if request.query_params.get("reason") == "session-expired" else "")
         return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
           <title>Kali MCP · Superuser login</title>
           <meta name="viewport" content="width=device-width">
           <link rel="stylesheet" href="/static/app.css"></head>
           <body><main class="login"><h1>Kali MCP</h1>
           <p>Superuser authentication</p>
+          {session_notice}
           <form method="post" action="/login">
             <input type="hidden" name="next" value="{html.escape(nxt,quote=True)}">
             <label>Username<input name="username" autocomplete="username" required maxlength="32"></label>
@@ -201,15 +205,54 @@ class UI:
                      "X-Frame-Options": "DENY",
                      "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'"})
 
+    @staticmethod
+    def _html_form(request: Request) -> bool:
+        """Browser navigation form, not an API fetch that expects JSON."""
+        return (request.method.upper() == "POST"
+                and "text/html" in request.headers.get("accept", "").lower())
+
+    @staticmethod
+    def _form_failure(request: Request, message: str, status_code: int = 403):
+        """Friendly browser feedback while keeping API error contracts intact."""
+        if not UI._html_form(request):
+            return JSONResponse({"error": message}, status_code=status_code,
+                                headers={"Cache-Control": "no-store"})
+        body = ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width">
+          <title>Kali MCP — Change not applied</title>
+          <link rel="stylesheet" href="/static/app.css"></head><body>
+          <main class="report"><section><h2>Change not applied</h2>
+          <p>""" + html.escape(message[:250]) +
+          """</p><p>No change was saved by this request.</p>
+          <a href="/">Return to dashboard</a></section></main></body></html>""")
+        return HTMLResponse(body, status_code=status_code, headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "same-origin",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'self'; base-uri 'none'"),
+        })
+
     def _admin(self, request: Request):
-        if not request.state.admin:
-            return JSONResponse({"error": "Administrator login required"}, status_code=401,
+        if request.state.admin:
+            return None
+        if self._html_form(request):
+            # A POST must NEVER be replayed after login. Return to GET dashboard
+            # and require the administrator to confirm the action anew.
+            response = RedirectResponse(
+                "/login?reason=session-expired&next=/", status_code=303,
                 headers={"Cache-Control": "no-store"})
-        return None
+            response.delete_cookie("kali_admin", path="/")
+            return response
+        return JSONResponse({"error": "Administrator login required"}, status_code=401,
+                            headers={"Cache-Control": "no-store"})
 
     def _csrf(self, request: Request, submitted: str):
         if not request.state.csrf or not secrets.compare_digest(request.state.csrf, submitted):
-            return JSONResponse({"error": "Invalid CSRF token"}, status_code=403)
+            if self._html_form(request):
+                return self._form_failure(request,
+                    "The form is no longer valid. Reload the dashboard and retry.", 403)
+            return JSONResponse({"error": "Invalid CSRF token"}, status_code=403,
+                                headers={"Cache-Control": "no-store"})
         return None
 
     async def _confirm_token_action(self, request: Request, password: str) -> bool:
@@ -686,7 +729,7 @@ class UI:
         name = str(form.get("feature") or "")
         enabled = str(form.get("enabled") or "").lower() == "true"
         if enabled and name == "host_root" and str(form.get("disclaimer") or "") != "yes":
-            return JSONResponse({"error": "Root disclaimer must be accepted"}, status_code=400)
+            return self._form_failure(request, "Root disclaimer must be accepted", 400)
         tracked = ("host_exec", "host_root", "package_install",
                    "network_changes", "mcp_updates")
         previous = {feature: self.store.get_setting(feature) for feature in tracked}
@@ -707,7 +750,8 @@ class UI:
             for feature, prior in previous.items():
                 if self.store.get_setting(feature) != prior:
                     self.store.set_setting(feature, prior, "webui-rollback")
-            return JSONResponse({"error": str(exc)[:300]}, status_code=403)
+            return self._form_failure(request,
+                "Setting not changed: " + str(exc)[:180], 403)
         return RedirectResponse("/", status_code=303)
 
     async def update_check(self, request: Request):
