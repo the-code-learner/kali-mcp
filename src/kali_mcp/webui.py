@@ -517,6 +517,14 @@ class UI:
         except ValueError as exc:
             return self._browser_notice("Invalid browser origin", str(exc), 400)
 
+    async def deployment_settings(self, request: Request):
+        from .deployment_webui import view
+        return await view(self, request)
+
+    async def deployment_settings_save(self, request: Request):
+        from .deployment_webui import save
+        return await save(self, request)
+
     async def dashboard(self, request: Request):
         if not request.state.admin:
             return RedirectResponse("/login", status_code=303)
@@ -625,6 +633,7 @@ class UI:
         body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
         <title>Kali MCP — Dashboard</title><link rel="stylesheet" href="/static/app.css"></head><body>
         <header><h1>Kali MCP <small>Control Plane</small></h1>
+        <nav><a href="/settings/deployment">Deployment &amp; Security</a></nav>
         <form method="post" action="/logout">
         <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
         <button type="submit">Logout</button></form></header>

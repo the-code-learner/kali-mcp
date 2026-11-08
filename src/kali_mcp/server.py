@@ -75,7 +75,11 @@ def capabilities_get() -> dict:
         key: {**details, "enabled": store.get_setting(key) if key in {
             "host_exec", "host_root", "package_install", "network_changes", "mcp_updates"} else details["allowed"]}
         for key, details in cfg.ceilings().items()},
-        "allowed_target_cidrs": list(cfg.allowed_cidrs)}
+        "allowed_target_cidrs": list(cfg.allowed_cidrs),
+        "denied_target_cidrs": list(cfg.denied_cidrs),
+        "allow_all_targets": cfg.allow_all_targets,
+        "scope_policy": "deny-first: blacklist always overrides allow-all and allowlist",
+        "scope_admin": "Configure Authorized Scope in the Kali MCP WebUI; clients cannot modify it."}
 
 
 @mcp.tool()

@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .browser_origins import parse_browser_origins
+from .deployment_settings import validate_scope
 
 
 def flag(name: str, default: bool = False) -> bool:
@@ -27,6 +28,8 @@ class Config:
     allow_mcp_host_exec: bool
     allow_mcp_root: bool
     allowed_cidrs: tuple[str, ...]
+    denied_cidrs: tuple[str, ...]
+    allow_all_targets: bool
     update_channel: str
     repo: str
     check_interval: int
@@ -48,6 +51,9 @@ class Config:
         if interval < 900:
             raise ValueError("Update interval must be >= 900 seconds")
         browser_origins = parse_browser_origins(os.getenv("KALI_MCP_BROWSER_ORIGINS", ""))
+        scope = validate_scope(os.getenv("KALI_MCP_ALLOW_ALL_TARGETS", "false"),
+                              os.getenv("KALI_MCP_ALLOWED_CIDRS", "127.0.0.1/32"),
+                              os.getenv("KALI_MCP_DENIED_CIDRS", ""))
         return cls(
             base_url=url,
             data_dir=Path(os.getenv("KALI_MCP_DATA_DIR", "/data")),
@@ -60,7 +66,9 @@ class Config:
             allow_mcp_updates=flag("KALI_MCP_ALLOW_MCP_UPDATES"),
             allow_mcp_host_exec=flag("KALI_MCP_ALLOW_MCP_HOST_EXEC"),
             allow_mcp_root=flag("KALI_MCP_ALLOW_MCP_ROOT"),
-            allowed_cidrs=tuple(s.strip() for s in os.getenv("KALI_MCP_ALLOWED_CIDRS", "127.0.0.1/32").split(",") if s.strip()),
+            allowed_cidrs=scope["allowed"],
+            denied_cidrs=scope["denied"],
+            allow_all_targets=scope["allow_all"],
             update_channel=channel,
             repo=os.getenv("KALI_MCP_REPO", "the-code-learner/kali-mcp"),
             check_interval=interval,

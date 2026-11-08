@@ -253,6 +253,8 @@ def configure(path: Path, gid: int, *, interactive: bool, host_user: str = "kali
         "KALI_MCP_PUBLIC_URL": origin,
         "KALI_MCP_RELEASE_CHANNEL": channel,
         "KALI_MCP_ALLOWED_CIDRS": old.get("KALI_MCP_ALLOWED_CIDRS", "127.0.0.1/32"),
+        "KALI_MCP_DENIED_CIDRS": old.get("KALI_MCP_DENIED_CIDRS", ""),
+        "KALI_MCP_ALLOW_ALL_TARGETS": old.get("KALI_MCP_ALLOW_ALL_TARGETS", "false"),
         "KALI_MCP_ALLOW_HOST_EXEC": str(host_exec).lower(),
         "KALI_MCP_ALLOW_HOST_ROOT": str(root).lower(),
         "KALI_MCP_ALLOW_MCP_HOST_EXEC": str(host_exec).lower(),
@@ -269,9 +271,16 @@ def configure(path: Path, gid: int, *, interactive: bool, host_user: str = "kali
         "KALI_MCP_BROWSER_ORIGINS": ",".join(origins),
     }
     for name, value in shared.items():
-        if value or name != "KALI_MCP_BROWSER_ORIGINS":
+        if value or name not in {"KALI_MCP_BROWSER_ORIGINS",
+                                 "KALI_MCP_DENIED_CIDRS", "KALI_MCP_ALLOWED_CIDRS"}:
             if not SAFE_VALUE.fullmatch(value):
                 raise ValueError("Invalid configuration value for " + name)
+    # Validate the effective policy even when resuming an old deployment.
+    # Never silently drop a previously configured blacklist.
+    from kali_mcp.deployment_settings import validate_scope
+    validate_scope(shared["KALI_MCP_ALLOW_ALL_TARGETS"],
+                   shared["KALI_MCP_ALLOWED_CIDRS"],
+                   shared["KALI_MCP_DENIED_CIDRS"])
     write_private(path / "stack.env", shared)
     host = {k: value for k, value in shared.items()
             if k.startswith("KALI_MCP_") and k not in {"KALI_MCP_ACCESS_MODE", "KALI_MCP_PORT", "KALI_MCP_AGENT_GID"}}
