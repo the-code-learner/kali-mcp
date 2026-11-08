@@ -58,14 +58,21 @@ class SecurityGate:
         origin = headers.get("origin", "")
         mcp_origins = {cfg.base_url, *cfg.browser_origins}
         cors_allowed = is_mcp and origin in mcp_origins
+        if any(sum(1 for name, _ in raw_headers if name == field) > 1
+               for field in ("host", "origin")):
+            # Duplicated Host/Origin values can be interpreted differently by
+            # the edge proxy and the MCP transport; reject at our ingress.
+            return await JSONResponse({"error": "ambiguous_headers"}, status_code=400)(
+                scope, receive, send)
 
         async def safe_send(message):
             if message["type"] == "http.response.start":
                 headers = message.setdefault("headers", [])
+                if not any(k.lower() == b"referrer-policy" for k, _ in headers):
+                    headers.append((b"referrer-policy", b"same-origin"))
                 headers.extend([
                     (b"x-content-type-options", b"nosniff"),
                     (b"x-frame-options", b"DENY"),
-                    (b"referrer-policy", b"same-origin"),
                     (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
                 ])
                 if cors_allowed:
