@@ -180,7 +180,7 @@ def main():
             "password": password,
             "name": "CI smoke llama.cpp",
             "days": "1",
-            "allowed_tools": "system_status",
+            "allowed_tools": "system_status,files_upload,files_upload_chunk,files_upload_finish,files_download,files_list,files_delete,jobs_export",
         })
         assert api_created.status == 200, api_created.read()
         api_html = api_created.read().decode("utf-8")
@@ -191,12 +191,12 @@ def main():
         assert token_match
         api_id = token_match.group(1)
 
-        def mcp_call(method, headers, name=None):
+        def mcp_call(method, headers, name=None, arguments=None):
             if method == "initialize":
                 params = {"protocolVersion": "2025-06-18", "capabilities": {},
                           "clientInfo": {"name": "beta5-ci", "version": "1.0"}}
             else:
-                params = {"name": name, "arguments": {}} if method == "tools/call" else {}
+                params = {"name": name, "arguments": arguments or {}} if method == "tools/call" else {}
             request = Request(base + "/mcp", data=json.dumps({
                 "jsonrpc": "2.0", "id": 25, "method": method, "params": params,
             }).encode(), method="POST", headers={
@@ -224,6 +224,81 @@ def main():
         custom_list = mcp_call("tools/list", {"X-Kali-MCP-API-Key": api_secret})
         assert custom_list.status == 200, custom_list.read()
         assert "system_status" in [t["name"] for t in json.load(custom_list)["result"]["tools"]]
+        # Real MCP JSON-RPC file tools, not only vault unit tests.
+        def file_tool(name, arguments):
+            resp = mcp_call("tools/call",
+                            {"Authorization": "Bearer " + api_secret},
+                            name, arguments)
+            assert resp.status == 200, (name, resp.read()[:400])
+            document = json.load(resp)
+            assert not document.get("error"), (name, document)
+            assert not document["result"].get("isError"), (name, document)
+            result = document["result"]
+            if isinstance(result.get("structuredContent"), dict):
+                body = result["structuredContent"]
+            else:
+                body = json.loads(result["content"][0]["text"])
+            assert body["ok"] is True, (name, body)
+            return body
+
+        small = b"CI MCP small transfer, binary: " + bytes([0, 0xff, 0x80])
+        created = file_tool("files_upload", {
+            "name": "ci-small.bin", "mode": "base64",
+            "data_base64": base64.b64encode(small).decode()})
+        retrieved = file_tool("files_download", {
+            "file_id": created["file_id"], "mode": "base64"})
+        assert base64.b64decode(retrieved["data_base64"]) == small
+        assert retrieved["done"] is True
+
+        # Use Base64 chunking for a file that cannot fit in a single MCP POST.
+        source = b"CI-CHUNKED" * 18000
+        opened = file_tool("files_upload", {
+            "name": "ci-chunked.bin", "mode": "base64", "size_bytes": len(source)})
+        offset = 0
+        while offset < len(source):
+            part = source[offset:offset + opened["chunk_bytes"]]
+            answer = file_tool("files_upload_chunk", {
+                "file_id": opened["file_id"], "offset": offset,
+                "data_base64": base64.b64encode(part).decode()})
+            offset = answer["written"]
+        completed = file_tool("files_upload_finish", {"file_id": opened["file_id"]})
+        assert completed["sha256"] == hashlib.sha256(source).hexdigest()
+        downloaded_parts = []
+        offset = 0
+        while True:
+            part = file_tool("files_download", {
+                "file_id": opened["file_id"], "mode": "base64", "offset": offset})
+            downloaded_parts.append(base64.b64decode(part["data_base64"]))
+            offset = part["next_offset"]
+            if part["done"]:
+                break
+        assert b"".join(downloaded_parts) == source
+
+        # OpenLink: grant only a short-lived signed PUT/GET, no host file access.
+        contents = b"\x00binary openlink transfer on Core\xff"
+        upload = file_tool("files_upload", {
+            "name": "ci-openlink.bin", "mode": "openlink", "size_bytes": len(contents)})
+        put_req = Request(base + urlsplit(upload["upload_url"]).path, method="PUT",
+            data=contents, headers={
+                "Host": bare_host, "Content-Type": "application/octet-stream",
+                **({"Origin": browser_origin} if browser_origin else {})})
+        pushed = opener.open(put_req, timeout=20)
+        assert pushed.status == 201 and json.load(pushed)["bytes"] == len(contents)
+        signed = file_tool("files_download", {
+            "file_id": upload["file_id"], "mode": "openlink"})
+        download_url = base + urlsplit(signed["url"]).path
+        get_headers = {"Host": bare_host, **({"Origin": browser_origin} if browser_origin else {})}
+        pulled = opener.open(Request(download_url, headers=get_headers), timeout=20)
+        assert pulled.status == 200 and pulled.read() == contents
+        try:
+            opener.open(Request(download_url, headers=get_headers), timeout=20)
+        except HTTPError as exc:
+            assert exc.status == 404
+        else:
+            raise AssertionError("Signed OpenLink download reused successfully")
+        assert file_tool("files_delete", {"file_id": upload["file_id"]})["ok"] is True
+        print("MCP file transfers: Base64 inline/chunked, OpenLink PUT/GET and one-use tokens passed")
+
         blocked = mcp_call("tools/call", {"Authorization": "Bearer " + api_secret}, "terminal_open")
         assert blocked.status == 403, blocked.read()
         invalid_bearer = mcp_call("tools/list", {"Authorization": "Bearer " + api_secret + "bad"})

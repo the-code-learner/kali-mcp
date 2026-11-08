@@ -105,21 +105,38 @@ class Admin:
         global_count, global_until = self.global_failures
         return until > time.monotonic() or global_until > time.monotonic()
 
+    @staticmethod
+    def _login_error(request: Request, message: str, status_code: int):
+        if "text/html" not in request.headers.get("accept", "").lower():
+            return JSONResponse({"error": message}, status_code=status_code,
+                                headers={"Cache-Control": "no-store"})
+        page = ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
+        <meta name="viewport" content="width=device-width">
+        <title>Kali MCP — Sign in</title>
+        <link rel="stylesheet" href="/static/app.css"></head><body>
+        <main class="report"><section><h2>Sign in unsuccessful</h2><p>""" +
+        html.escape(message) +
+        """</p><a href="/login">Return to sign in</a></section></main></body></html>""")
+        return HTMLResponse(page, status_code=status_code, headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'",
+        })
+
     async def login_post(self, request: Request):
         try:
             expected_user, fingerprint, record = self._credential()
         except (RuntimeError, ValueError, OSError):
-            return JSONResponse({"error": "Superuser setup incomplete"}, status_code=503)
+            return self._login_error(request, "Superuser setup is incomplete", 503)
         source = request.client.host if request.client else "unknown"
         if self._rate_limited(source):
-            return JSONResponse({"error": "Too many login attempts"}, status_code=429)
+            return self._login_error(request, "Too many login attempts. Try again later.", 429)
         if int(request.headers.get("content-length", "0")) > 4096:
-            return JSONResponse({"error": "Request too large"}, status_code=413)
+            return self._login_error(request, "Login request is too large", 413)
         form = await request.form()
         username = str(form.get("username") or "admin")[:64]
         password = str(form.get("password") or "")
         if len(password) > 256:
-            return HTMLResponse("Invalid credentials", status_code=401)
+            return self._login_error(request, "Invalid username or password", 401)
         if record is not None:
             async with self.hash_gate:
                 valid = await asyncio.to_thread(verify, record, username, password)
@@ -136,7 +153,7 @@ class Admin:
             if len(self.failures) > 4096:
                 self.failures.clear()
             self.store.audit("webui", "admin.login", "deny", "authentication rejected")
-            return HTMLResponse("Invalid credentials", status_code=401)
+            return self._login_error(request, "Invalid username or password", 401)
         self.failures.pop(source, None)
         self.global_failures = (0, 0)
         cookie = secrets.token_urlsafe(48)
@@ -157,10 +174,12 @@ class Admin:
 
     async def logout(self, request: Request):
         if not request.state.admin or not request.state.csrf:
-            return JSONResponse({"error": "Login required"}, status_code=401)
+            return (RedirectResponse("/login?reason=session-expired&next=/", status_code=303)
+                    if "text/html" in request.headers.get("accept", "").lower()
+                    else JSONResponse({"error": "Login required"}, status_code=401))
         form = await request.form()
         if not secrets.compare_digest(str(form.get("csrf") or ""), request.state.csrf):
-            return JSONResponse({"error": "Invalid CSRF"}, status_code=403)
+            return self._login_error(request, "Logout form is invalid; reload the dashboard.", 403)
         cookie = request.cookies.get("kali_admin", "")
         if cookie:
             with self.store.lock:
@@ -295,7 +314,7 @@ class UI:
         if (error := self._csrf(request, str(form.get("csrf") or ""))):
             return error
         if not await self._confirm_token_action(request, str(form.get("password") or "")):
-            return JSONResponse({"error": "Superuser confirmation required"}, status_code=403)
+            return self._form_failure(request, "Superuser password confirmation required", 403)
         try:
             browser_origin = str(form.get("browser_origin") or "").strip()
             if browser_origin:
@@ -311,7 +330,7 @@ class UI:
                 self._token_fingerprint(), days=int(form.get("days") or 30),
                 allowed_tools=names, actor="webui:" + request.state.admin_username)
         except (ValueError, OSError) as exc:
-            return JSONResponse({"error": str(exc)[:160]}, status_code=400)
+            return self._form_failure(request, "Invalid token request: " + str(exc)[:160], 400)
         return self._show_one_time_token(token_id, token)
 
     async def rotate_api_token(self, request: Request):
@@ -321,14 +340,14 @@ class UI:
         if (error := self._csrf(request, str(form.get("csrf") or ""))):
             return error
         if not await self._confirm_token_action(request, str(form.get("password") or "")):
-            return JSONResponse({"error": "Superuser confirmation required"}, status_code=403)
+            return self._form_failure(request, "Superuser password confirmation required", 403)
         try:
             token_id, token = self.store.rotate_api_token(
                 str(form.get("token_id") or ""), self.cfg.resource,
                 self._token_fingerprint(), days=int(form.get("days") or 30),
                 actor="webui:" + request.state.admin_username)
         except (ValueError, OSError) as exc:
-            return JSONResponse({"error": str(exc)[:160]}, status_code=400)
+            return self._form_failure(request, "Invalid token request: " + str(exc)[:160], 400)
         return self._show_one_time_token(token_id, token)
 
     async def revoke_api_token(self, request: Request):
@@ -338,14 +357,14 @@ class UI:
         if (error := self._csrf(request, str(form.get("csrf") or ""))):
             return error
         if not await self._confirm_token_action(request, str(form.get("password") or "")):
-            return JSONResponse({"error": "Superuser confirmation required"}, status_code=403)
+            return self._form_failure(request, "Superuser password confirmation required", 403)
         try:
             revoked = self.store.revoke_api_token(str(form.get("token_id") or ""),
                         actor="webui:" + request.state.admin_username)
         except ValueError:
-            return JSONResponse({"error": "Invalid API token ID"}, status_code=400)
+            return self._form_failure(request, "Invalid API token ID", 400)
         if not revoked:
-            return JSONResponse({"error": "API token not found or already revoked"}, status_code=404)
+            return self._form_failure(request, "API token not found or already revoked", 404)
         return RedirectResponse("/", status_code=303)
 
     @staticmethod
@@ -812,9 +831,9 @@ class UI:
             done = self.store.revoke_client(str(form.get("client_id") or ""),
                                             actor="webui:" + request.state.admin_username)
         except ValueError:
-            return JSONResponse({"error": "Invalid client identifier"}, status_code=400)
+            return self._form_failure(request, "Invalid client identifier", 400)
         if not done:
-            return JSONResponse({"error": "Unknown client"}, status_code=404)
+            return self._form_failure(request, "OAuth client not found or already revoked", 404)
         return RedirectResponse("/", status_code=303)
 
     async def job_report(self, request: Request):

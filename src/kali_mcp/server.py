@@ -15,6 +15,7 @@ from .policy import Policy, PolicyDenied
 from .registry import KNOWN, discover, installer_argv, tool_command
 from .releases import UpdateChecker
 from .store import Store
+from .transfers import TransferVault, TransferError, MAX_BASE64_FILE
 
 
 ACTOR: ContextVar[str] = ContextVar("kali_mcp_actor", default="mcp:unknown")
@@ -34,6 +35,7 @@ store = Store(cfg.data_dir / "app.db")
 policy = Policy(cfg, store)
 jobs = Jobs(cfg, store)
 updates = UpdateChecker(cfg.repo, cfg.update_channel, cfg.check_interval)
+vault = TransferVault(cfg.data_dir / "transfers", store, cfg.base_url)
 
 
 def actor() -> str:
@@ -237,6 +239,106 @@ def updates_install(tag: str) -> dict:
         return {"ok": False, "error": "Only the current latest eligible release can be installed"}
     return jobs.submit(actor=actor(), tool_id="core-upgrade", mode="systemd",
                        operation="updates_install", payload={"tag": tag})
+
+
+@mcp.tool()
+def files_upload(name: str, mode: str = "base64", data_base64: str = "",
+                 size_bytes: int = 0, mime_type: str = "application/octet-stream") -> dict:
+    """Upload a file from this authenticated client, 100 MB max.
+
+    OpenLink: set mode=openlink, size_bytes=exact size; PUT raw bytes to the
+    one-use signed HTTPS URL, streaming without a large MCP JSON payload.
+
+    Base64: up to 128 KiB can be sent inline with data_base64. For larger
+    files (up to 100 MB), set mode=base64, size_bytes=total and omit
+    data_base64; then call files_upload_chunk in strict offset order and
+    files_upload_finish to verify size/checksum.
+    No method grants arbitrary host filesystem access or root privileges.
+    """
+    def compute():
+        owner = actor()
+        if mode == "base64":
+            if data_base64:
+                if size_bytes:
+                    raise TransferError("For inline Base64, omit size_bytes")
+                return vault.put_base64(owner, name, mime_type, data_base64)
+            if size_bytes:
+                return vault.begin_base64(owner, name, mime_type, size_bytes)
+            return vault.put_bytes(owner, name, mime_type, b"")
+        if mode == "openlink":
+            if data_base64:
+                raise TransferError("Use size_bytes, not data_base64, for OpenLink uploads")
+            return vault.begin_upload(owner, name, mime_type, size_bytes)
+        raise TransferError("Mode must be 'openlink' or 'base64'")
+    return safe_call(compute)
+
+
+@mcp.tool()
+def files_upload_chunk(file_id: str, offset: int, data_base64: str) -> dict:
+    """Append one Base64 chunk of at most 128 KiB to this client's pending file.
+
+    Offset is the raw-byte position (not Base64 characters). Repeat until
+    remaining=0, then call files_upload_finish. Total size may reach 100 MB.
+    """
+    return safe_call(vault.append_base64, actor(), file_id, offset, data_base64)
+
+
+@mcp.tool()
+def files_upload_finish(file_id: str) -> dict:
+    """Commit a complete chunked Base64 upload after streaming SHA-256 validation."""
+    return safe_call(vault.finish_base64, actor(), file_id)
+
+
+@mcp.tool()
+def files_download(file_id: str, mode: str = "openlink",
+                   offset: int = 0, max_bytes: int = MAX_BASE64_FILE) -> dict:
+    """Transfer a client-owned file, up to 100 MB.
+
+    OpenLink gives a 10-minute, one-use HTTPS link for streamed download.
+    Base64 returns up to 128 KiB per call and a next_offset; continue until
+    done=true. Verify the final file's SHA-256. Only the owning MCP client
+    can retrieve metadata or mint new download capabilities.
+    """
+    return safe_call(vault.get_file, actor(), file_id, mode, offset, max_bytes)
+
+
+@mcp.tool()
+def files_list() -> dict:
+    """List this authenticated MCP client's uploaded files and their metadata."""
+    return safe_call(vault.list_files, actor())
+
+
+@mcp.tool()
+def files_delete(file_id: str) -> dict:
+    """Delete this MCP client's stored transfer file and revoke its links."""
+    return safe_call(vault.delete, actor(), file_id)
+
+
+@mcp.tool()
+def jobs_export(job_id: str, stream: str = "stdout",
+                mode: str = "openlink") -> dict:
+    """Export a completed, client-owned job's stdout/stderr as a transferable file.
+
+    Output remains capped by the existing job log limits. Does not grant
+    access to arbitrary host paths or other clients' jobs.
+    """
+    def compute():
+        owner = actor()
+        record = store.get_job(job_id)
+        if not record or record["actor"] != owner:
+            raise TransferError("Unknown job for this MCP client")
+        if record["state"] not in {"completed", "failed", "timed_out"}:
+            raise TransferError("Job output is not yet available")
+        if stream not in {"stdout", "stderr"}:
+            raise TransferError("Stream must be stdout or stderr")
+        result = record.get("result") or {}
+        raw = str(result.get(stream) or "").encode("utf-8")
+        if len(raw) > MAX_BASE64_FILE:
+            raise TransferError("Job output exceeds transfer limit")
+        item = vault.put_bytes(owner, stream + "-" + job_id[:12] + ".txt",
+                               "text/plain", raw)
+        return vault.get_file(owner, item["file_id"], mode)
+    return safe_call(compute)
 
 
 @mcp.tool()

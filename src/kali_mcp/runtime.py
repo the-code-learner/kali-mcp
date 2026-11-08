@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 from urllib.parse import urlparse
 import json
 import os
@@ -12,11 +13,12 @@ import threading
 import time
 
 from .superuser import read_record
+from .transfers import TransferError, MAX_OPENLINK_FILE
 
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, FileResponse
 from starlette.routing import Mount, Route
 
 from . import server as core
@@ -28,6 +30,34 @@ cfg, store = core.cfg, core.store
 oauth = OAuth(cfg, store)
 admin = Admin(cfg, store)
 ui = UI(cfg, store, core.policy, core.jobs, core.updates)
+
+
+def _ingress_error(path: str, headers: dict[str, str], code: str, status: int):
+    """Make browser navigation failures readable; keep API and MCP error JSON."""
+    browser = ("text/html" in headers.get("accept", "").lower() and
+               path.startswith(("/api/v1/", "/login", "/logout", "/authorize")))
+    if not browser:
+        return JSONResponse({"error": code}, status_code=status,
+                            headers={"Cache-Control": "no-store"})
+    messages = {
+        "ambiguous_headers": "The browser sent conflicting request headers. Reload the page.",
+        "Unrecognized Host": "The requested hostname is not authorized for this server.",
+        "origin_mismatch": "The browser origin did not match the WebUI address. Reload the dashboard.",
+        "request_too_large": "The submitted request is too large.",
+        "rate_limited": "Too many requests. Retry later.",
+    }
+    message = messages.get(code, "The request was blocked by a security check.")
+    body = ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width">
+    <title>Kali MCP — Request not completed</title>
+    <link rel="stylesheet" href="/static/app.css"></head><body>
+    <main class="report"><section><h2>Request not completed</h2><p>""" +
+    html.escape(message) + """</p><p>No changes were made by this request.</p>
+    <a href="/">Return to dashboard</a></section></main></body></html>""")
+    return HTMLResponse(body, status_code=status, headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "same-origin",
+        "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'",
+    })
 
 
 class SecurityGate:
@@ -51,18 +81,19 @@ class SecurityGate:
 
         path = scope.get("path", "")
         is_mcp = path == "/mcp" or path.startswith("/mcp/")
+        is_file_link = path.startswith("/files/openlink/")
         method = scope.get("method", "GET").upper()
         raw_headers = [(k.decode("latin1").lower(), v.decode("latin1"))
                        for k, v in scope.get("headers", [])]
         headers = dict(raw_headers)
         origin = headers.get("origin", "")
         mcp_origins = {cfg.base_url, *cfg.browser_origins}
-        cors_allowed = is_mcp and origin in mcp_origins
+        cors_allowed = (is_mcp or is_file_link) and origin in mcp_origins
         if any(sum(1 for name, _ in raw_headers if name == field) > 1
                for field in ("host", "origin")):
             # Duplicated Host/Origin values can be interpreted differently by
             # the edge proxy and the MCP transport; reject at our ingress.
-            return await JSONResponse({"error": "ambiguous_headers"}, status_code=400)(
+            return await _ingress_error(path, headers, "ambiguous_headers", 400)(
                 scope, receive, send)
 
         async def safe_send(message):
@@ -80,11 +111,13 @@ class SecurityGate:
                     for key, value in (
                         (b"access-control-allow-origin", origin.encode("latin1")),
                         (b"vary", b"Origin"),
-                        (b"access-control-expose-headers", b"Mcp-Session-Id"),
+                        (b"access-control-expose-headers",
+                         b"Content-Disposition, Content-Length" if is_file_link else b"Mcp-Session-Id"),
                     ):
                         if key not in existing:
                             headers.append((key, value))
-                    headers.append((b"cache-control", b"no-store"))
+                    if b"cache-control" not in existing:
+                        headers.append((b"cache-control", b"no-store"))
                 if cfg.base_url.startswith("https://"):
                     headers.append((b"strict-transport-security", b"max-age=31536000"))
                 if scope.get("path", "").startswith(("/api/", "/jobs/", "/login", "/logout", "/authorize", "/token", "/register")):
@@ -97,7 +130,23 @@ class SecurityGate:
         except ValueError:
             host = None
         if host not in {self.host, "localhost", "127.0.0.1", "::1", "kali-mcp-core"}:
-            return await JSONResponse({"error": "Unrecognized Host"}, status_code=400)(scope, receive, safe_send)
+            return await _ingress_error(path, headers, "Unrecognized Host", 400)(scope, receive, safe_send)
+
+        # OpenLink PUT/GET capabilities are narrow, origin-limited transfer
+        # endpoints, never general API CORS or an authorization bypass for MCP.
+        if is_file_link and method == "OPTIONS":
+            if not cors_allowed or headers.get("access-control-request-method", "").upper() not in {"PUT", "GET"}:
+                return await JSONResponse({"error": "Origin not allowed"}, status_code=403)(
+                    scope, receive, safe_send)
+            return await PlainTextResponse("", status_code=204, headers={
+                "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+                "Access-Control-Max-Age": "600",
+                "Cache-Control": "no-store",
+            })(scope, receive, safe_send)
+        if is_file_link and origin and not cors_allowed:
+            return await JSONResponse({"error": "Origin not allowed"}, status_code=403)(
+                scope, receive, safe_send)
 
         if method == "OPTIONS" and path == "/mcp":
             if not cors_allowed or not headers.get("access-control-request-method", "").upper() in {
@@ -129,7 +178,7 @@ class SecurityGate:
                 if len(self._mcp_recent) > 2048:
                     self._mcp_recent.clear()
             if excessive:
-                return await JSONResponse({"error": "rate_limited"}, status_code=429)(
+                return await _ingress_error(path, headers, "rate_limited", 429)(
                     scope, receive, safe_send)
 
         if method == "POST" and path in {"/register", "/token", "/authorize", "/login"}:
@@ -148,7 +197,7 @@ class SecurityGate:
                 if len(self._recent) > 2048:
                     self._recent.clear()
             if excessive:
-                return await JSONResponse({"error": "rate_limited"}, status_code=429)(scope, receive, safe_send)
+                return await _ingress_error(path, headers, "rate_limited", 429)(scope, receive, safe_send)
 
         if method == "POST" and path in {"/login", "/authorize", "/logout",
                                         "/api/v1/settings", "/api/v1/clients/revoke", "/api/v1/updates/check",
@@ -194,7 +243,7 @@ class SecurityGate:
             except ValueError:
                 declared = max_size + 1
             if declared > max_size:
-                return await JSONResponse({"error": "request_too_large"}, status_code=413)(scope, receive, safe_send)
+                return await _ingress_error(path, headers, "request_too_large", 413)(scope, receive, safe_send)
             # Also enforce the limit for chunked/streaming uploads without
             # Content-Length, before invoking any parser or the MCP transport.
             chunks = []
@@ -208,7 +257,7 @@ class SecurityGate:
                 chunk = message.get("body", b"")
                 total += len(chunk)
                 if total > max_size:
-                    return await JSONResponse({"error": "request_too_large"}, status_code=413)(scope, receive, safe_send)
+                    return await _ingress_error(path, headers, "request_too_large", 413)(scope, receive, safe_send)
                 chunks.append(chunk)
                 if not message.get("more_body", False):
                     break
@@ -290,6 +339,45 @@ class SecurityGate:
         return await self.app(scope, receive, safe_send)
 
 
+async def openlink_get(request: Request):
+    """One-use, ten-minute bearer capability to download a Core workspace file.
+
+    The URL itself is the credential. No client can select an arbitrary path.
+    """
+    secret = request.path_params["ticket"]
+    selection = core.vault.consume_download(secret)
+    if not selection:
+        return PlainTextResponse("Download link invalid, expired or already used", status_code=404,
+                                 headers={"Cache-Control": "no-store"})
+    path, name = selection
+    return FileResponse(path, filename=name, content_disposition_type="attachment",
+                        media_type="application/octet-stream",
+                        headers={"Cache-Control": "private, no-store",
+                                 "Referrer-Policy": "no-referrer",
+                                 "Content-Security-Policy": "default-src 'none'"})
+
+
+async def openlink_put(request: Request):
+    """Receive a bounded raw byte stream from a prepared one-use OpenLink."""
+    if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/octet-stream":
+        return JSONResponse({"error": "Use Content-Type: application/octet-stream"},
+                            status_code=415, headers={"Cache-Control": "no-store"})
+    length = request.headers.get("content-length")
+    try:
+        declared = int(length) if length is not None else None
+    except ValueError:
+        return JSONResponse({"error": "Invalid Content-Length"}, status_code=400)
+    if declared is not None and (declared < 0 or declared > MAX_OPENLINK_FILE):
+        return JSONResponse({"error": "Upload exceeds 8 MiB limit"}, status_code=413)
+    try:
+        result = await core.vault.receive_upload(request.path_params["ticket"],
+                                                  request.stream(), declared)
+        return JSONResponse(result, status_code=201, headers={"Cache-Control": "no-store"})
+    except TransferError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400,
+                            headers={"Cache-Control": "no-store"})
+
+
 async def health(request: Request):
     return JSONResponse({"ok": True, "service": "kali-mcp-core", "version": os.getenv("KALI_MCP_REF", "development")})
 
@@ -351,6 +439,8 @@ _mcp_app = core.mcp.streamable_http_app(
 app = SecurityGate(Starlette(
     routes=[
         Route("/healthz", health, methods=["GET"]),
+        Route("/files/openlink/{ticket}", openlink_get, methods=["GET"]),
+        Route("/files/openlink/{ticket}", openlink_put, methods=["PUT"]),
         Route("/readyz", health, methods=["GET"]),
         Route("/.well-known/oauth-protected-resource", oauth.protected_resource, methods=["GET"]),
         Route("/.well-known/oauth-protected-resource/mcp", oauth.protected_resource, methods=["GET"]),
