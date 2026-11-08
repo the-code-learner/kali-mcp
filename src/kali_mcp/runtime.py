@@ -12,11 +12,12 @@ import threading
 import time
 
 from .superuser import read_record
+from .transfers import TransferError, MAX_OPENLINK_FILE
 
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, FileResponse
 from starlette.routing import Mount, Route
 
 from . import server as core
@@ -51,13 +52,14 @@ class SecurityGate:
 
         path = scope.get("path", "")
         is_mcp = path == "/mcp" or path.startswith("/mcp/")
+        is_file_link = path.startswith("/files/openlink/")
         method = scope.get("method", "GET").upper()
         raw_headers = [(k.decode("latin1").lower(), v.decode("latin1"))
                        for k, v in scope.get("headers", [])]
         headers = dict(raw_headers)
         origin = headers.get("origin", "")
         mcp_origins = {cfg.base_url, *cfg.browser_origins}
-        cors_allowed = is_mcp and origin in mcp_origins
+        cors_allowed = (is_mcp or is_file_link) and origin in mcp_origins
         if any(sum(1 for name, _ in raw_headers if name == field) > 1
                for field in ("host", "origin")):
             # Duplicated Host/Origin values can be interpreted differently by
@@ -80,7 +82,8 @@ class SecurityGate:
                     for key, value in (
                         (b"access-control-allow-origin", origin.encode("latin1")),
                         (b"vary", b"Origin"),
-                        (b"access-control-expose-headers", b"Mcp-Session-Id"),
+                        (b"access-control-expose-headers",
+                         b"Content-Disposition, Content-Length" if is_file_link else b"Mcp-Session-Id"),
                     ):
                         if key not in existing:
                             headers.append((key, value))
@@ -98,6 +101,22 @@ class SecurityGate:
             host = None
         if host not in {self.host, "localhost", "127.0.0.1", "::1", "kali-mcp-core"}:
             return await JSONResponse({"error": "Unrecognized Host"}, status_code=400)(scope, receive, safe_send)
+
+        # OpenLink PUT/GET capabilities are narrow, origin-limited transfer
+        # endpoints, never general API CORS or an authorization bypass for MCP.
+        if is_file_link and method == "OPTIONS":
+            if not cors_allowed or headers.get("access-control-request-method", "").upper() not in {"PUT", "GET"}:
+                return await JSONResponse({"error": "Origin not allowed"}, status_code=403)(
+                    scope, receive, safe_send)
+            return await PlainTextResponse("", status_code=204, headers={
+                "Access-Control-Allow-Methods": "GET, PUT, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+                "Access-Control-Max-Age": "600",
+                "Cache-Control": "no-store",
+            })(scope, receive, safe_send)
+        if is_file_link and origin and not cors_allowed:
+            return await JSONResponse({"error": "Origin not allowed"}, status_code=403)(
+                scope, receive, safe_send)
 
         if method == "OPTIONS" and path == "/mcp":
             if not cors_allowed or not headers.get("access-control-request-method", "").upper() in {
@@ -290,6 +309,45 @@ class SecurityGate:
         return await self.app(scope, receive, safe_send)
 
 
+async def openlink_get(request: Request):
+    """One-use, ten-minute bearer capability to download a Core workspace file.
+
+    The URL itself is the credential. No client can select an arbitrary path.
+    """
+    secret = request.path_params["ticket"]
+    selection = core.vault.consume_download(secret)
+    if not selection:
+        return PlainTextResponse("Download link invalid, expired or already used", status_code=404,
+                                 headers={"Cache-Control": "no-store"})
+    path, name = selection
+    return FileResponse(path, filename=name, content_disposition_type="attachment",
+                        media_type="application/octet-stream",
+                        headers={"Cache-Control": "private, no-store",
+                                 "Referrer-Policy": "no-referrer",
+                                 "Content-Security-Policy": "default-src 'none'"})
+
+
+async def openlink_put(request: Request):
+    """Receive a bounded raw byte stream from a prepared one-use OpenLink."""
+    if request.headers.get("content-type", "").split(";", 1)[0].lower() != "application/octet-stream":
+        return JSONResponse({"error": "Use Content-Type: application/octet-stream"},
+                            status_code=415, headers={"Cache-Control": "no-store"})
+    length = request.headers.get("content-length")
+    try:
+        declared = int(length) if length is not None else None
+    except ValueError:
+        return JSONResponse({"error": "Invalid Content-Length"}, status_code=400)
+    if declared is not None and (declared < 0 or declared > MAX_OPENLINK_FILE):
+        return JSONResponse({"error": "Upload exceeds 8 MiB limit"}, status_code=413)
+    try:
+        result = await core.vault.receive_upload(request.path_params["ticket"],
+                                                  request.stream(), declared)
+        return JSONResponse(result, status_code=201, headers={"Cache-Control": "no-store"})
+    except TransferError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400,
+                            headers={"Cache-Control": "no-store"})
+
+
 async def health(request: Request):
     return JSONResponse({"ok": True, "service": "kali-mcp-core", "version": os.getenv("KALI_MCP_REF", "development")})
 
@@ -351,6 +409,8 @@ _mcp_app = core.mcp.streamable_http_app(
 app = SecurityGate(Starlette(
     routes=[
         Route("/healthz", health, methods=["GET"]),
+        Route("/files/openlink/{ticket}", openlink_get, methods=["GET"]),
+        Route("/files/openlink/{ticket}", openlink_put, methods=["PUT"]),
         Route("/readyz", health, methods=["GET"]),
         Route("/.well-known/oauth-protected-resource", oauth.protected_resource, methods=["GET"]),
         Route("/.well-known/oauth-protected-resource/mcp", oauth.protected_resource, methods=["GET"]),
