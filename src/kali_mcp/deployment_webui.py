@@ -165,7 +165,10 @@ async def save(ui, request):
                 "KALI_MCP_ALLOW_ALL_TARGETS")
         changes = {key: str(form.get(key) or "") for key in keys}
     elif section == "variable":
-        changes = {str(form.get("key") or ""): str(form.get("value") or "")}
+        key = str(form.get("key") or "")
+        if key not in FIELD_MAP:
+            return ui._form_failure(request, "This setting is installer-managed", 400)
+        changes = {key: str(form.get("value") or "")}
     elif section == "batch":
         raw = str(form.get("changes") or "")
         if len(raw) > 9000:
@@ -177,6 +180,7 @@ async def save(ui, request):
         if (not isinstance(changes, dict) or not (1 <= len(changes) <= 3)
                 or any(not isinstance(k, str) or not isinstance(v, str)
                        for k, v in changes.items())
+                or any(k not in FIELD_MAP for k in changes)
                 or any(k in {"KALI_MCP_ALLOWED_CIDRS",
                              "KALI_MCP_DENIED_CIDRS",
                              "KALI_MCP_ALLOW_ALL_TARGETS"} for k in changes)):
