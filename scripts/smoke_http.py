@@ -92,10 +92,13 @@ def main():
     })
     assert exchanged.status == 200, exchanged.read()
     token = json.load(exchanged)["access_token"]
+    # Cloudflare/browser HTTPS requests usually omit :443 from the Host
+    # header. The SDK must accept a bare Host as well as a Host:port value.
+    bare_host = os.getenv("KALI_MCP_SMOKE_HOST", urlsplit(base).hostname or "localhost")
     req = Request(base + "/mcp", data=json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {},
     }).encode(), method="POST", headers={
-        "Content-Type": "application/json",
+        "Host": bare_host, "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
         "Authorization": "Bearer " + token,
         "MCP-Protocol-Version": "2025-06-18",
@@ -113,7 +116,7 @@ def main():
         "jsonrpc": "2.0", "id": 2, "method": "tools/call",
         "params": {"name": "jobs_list", "arguments": {"limit": 1}},
     }).encode(), method="POST", headers={
-        "Content-Type": "application/json",
+        "Host": bare_host, "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
         "Authorization": "Bearer " + token,
         "MCP-Protocol-Version": "2025-06-18",
@@ -137,8 +140,10 @@ def main():
         browser_origin = os.getenv("KALI_MCP_SMOKE_BROWSER_ORIGIN", "")
         if browser_origin:
             preflight = Request(base + "/mcp", method="OPTIONS", headers={
-                "Origin": browser_origin, "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "authorization,content-type"})
+                "Host": bare_host, "Origin": browser_origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers":
+                    "authorization,content-type,mcp-protocol-version"})
             try:
                 cors_response = opener.open(preflight, timeout=15)
             except HTTPError as exc:
@@ -171,6 +176,8 @@ def main():
             request = Request(base + "/mcp", data=json.dumps({
                 "jsonrpc": "2.0", "id": 25, "method": method, "params": params,
             }).encode(), method="POST", headers={
+                "Host": bare_host,
+                **({"Origin": browser_origin} if browser_origin else {}),
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/event-stream",
                 "MCP-Protocol-Version": "2025-06-18",
@@ -195,6 +202,16 @@ def main():
         assert "system_status" in [t["name"] for t in json.load(custom_list)["result"]["tools"]]
         blocked = mcp_call("tools/call", {"Authorization": "Bearer " + api_secret}, "terminal_open")
         assert blocked.status == 403, blocked.read()
+        invalid_bearer = mcp_call("tools/list", {"Authorization": "Bearer " + api_secret + "bad"})
+        assert invalid_bearer.status == 401, invalid_bearer.read()
+        if browser_origin:
+            denied_origin = mcp_call("tools/list", {
+                "Authorization": "Bearer " + api_secret,
+                "Origin": "https://untrusted.example.test"})
+            assert denied_origin.status == 403, denied_origin.read()
+        bad_host = mcp_call("tools/list", {
+            "Authorization": "Bearer " + api_secret, "Host": "evil.example.test"})
+        assert bad_host.status in (400, 421), bad_host.read()
         revoked = post("/api/v1/api-tokens/revoke", {
             "csrf": csrf_match.group(1), "password": password, "token_id": api_id})
         assert revoked.status == 303, revoked.read()
