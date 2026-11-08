@@ -53,3 +53,38 @@ def test_private_file_atomic_write_leaves_no_tempfiles(tmp_path):
     wizard.write_private(target, {"EXAMPLE": "two"})
     assert target.read_text() == "EXAMPLE=two\n"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["stack.env"]
+
+
+def test_migrate_verified_beta4_settings_without_changing_secrets(tmp_path, monkeypatch):
+    """Recover legacy installs missing config.ready without invoking wizard prompts."""
+    import sys
+
+    monkeypatch.setenv("KALI_MCP_ADMIN_PASSWORD", PASSWORD)
+    monkeypatch.setenv("KALI_MCP_ACCESS_MODE", "local")
+    monkeypatch.setenv("KALI_MCP_RELEASE_CHANNEL", "beta")
+    wizard.configure(tmp_path, 1234, interactive=False, host_user="kali")
+    original = {name: (tmp_path / name).read_bytes()
+                for name in ("stack.env", "agent.env", "superuser.json")}
+    (tmp_path / "config.ready").unlink()
+    assert not wizard.is_complete(tmp_path)
+    assert wizard.is_complete(tmp_path, require_marker=False)
+
+    monkeypatch.setattr(sys, "argv", [
+        "wizard.py", "--config-dir", str(tmp_path), "--migrate-legacy"
+    ])
+    wizard.main()
+    assert wizard.is_complete(tmp_path)
+    assert (tmp_path / "config.ready").stat().st_mode & 0o777 == 0o600
+    assert all((tmp_path / name).read_bytes() == value
+               for name, value in original.items())
+
+    # Repeating migration must not overwrite a legitimate marker.
+    with pytest.raises(SystemExit, match="Refusing to migrate"):
+        wizard.main()
+
+    # An incomplete config cannot be declared ready, even with migration flag.
+    (tmp_path / "config.ready").unlink()
+    (tmp_path / "agent.env").unlink()
+    assert not wizard.is_complete(tmp_path, require_marker=False)
+    with pytest.raises(SystemExit, match="Refusing to migrate"):
+        wizard.main()
