@@ -14,7 +14,7 @@ access/refresh and rotation), and the **single** `/mcp` endpoint.
   last-used metadata and optional per-tool allowlists.
 - New WebUI **MCP Clients → API Tokens**, with superuser reauthentication/CSRF.
 - Local sudo-authenticated CLI `api-tokens`, `api-token-create`,
-  `api-token-revoke`. Never place the secret in command arguments.
+  `api-token-revoke`, `api-token-rotate`. Rotation revokes the previous\n  key in the same SQLite transaction and displays the replacement just once.\n  Never place a secret in command arguments.
 - Identity audit separation: `mcp:oauth:<client_id>` and
   `mcp:api:<token_id>`. Keys are invalidated when the issuing superuser
   credential fingerprint changes.
