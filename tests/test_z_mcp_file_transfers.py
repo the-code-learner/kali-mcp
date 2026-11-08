@@ -174,6 +174,31 @@ def test_hundred_megabyte_limits_and_chunked_base64_roundtrip(tmp_path):
     store.close()
 
 
+def test_full_100mb_openlink_stream_without_buffering(tmp_path):
+    """Verify exact 100,000,000 bytes are accepted via a streaming source."""
+    store, vault = make_vault(tmp_path)
+    requested = 100_000_000
+    started = vault.begin_upload(OWNER, "full-100mb.bin",
+                                 "application/octet-stream", requested)
+    async def chunks():
+        chunk = b"x" * 100_000
+        for _ in range(1000):
+            yield chunk
+    saved = asyncio.run(vault.receive_upload(
+        ticket_from_url(started["upload_url"]), chunks(), requested))
+    assert saved["bytes"] == requested
+    assert (vault.directory / saved["file_id"]).stat().st_size == requested
+    proof = hashlib.sha256()
+    for _ in range(1000):
+        proof.update(b"x" * 100_000)
+    assert saved["sha256"] == proof.hexdigest()
+    assert vault.get_file(OWNER, saved["file_id"], "openlink")["mode"] == "openlink"
+    with pytest.raises(TransferError, match="100 MB"):
+        vault.begin_upload(OWNER, "101mb.bin", "application/octet-stream", requested + 1)
+    assert vault.delete(OWNER, saved["file_id"])["ok"]
+    store.close()
+
+
 def test_http_openlink_upload_download_and_origin_denials(tmp_path, monkeypatch):
     monkeypatch.setenv("KALI_MCP_DATA_DIR", str(tmp_path))
     from kali_mcp import runtime
