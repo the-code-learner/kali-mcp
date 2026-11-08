@@ -49,6 +49,10 @@ jobs:
           test "$(docker inspect --format '{{.HostConfig.Privileged}}' kali-mcp-core)" = false
           test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
           curl -fsS http://127.0.0.1:8787/healthz
+      - name: Stage private temporary CI credential
+        run: |
+          sudo install -m 0600 /dev/null /run/kali-mcp-cli-test-password
+          echo "CI_BETA8_RELEASE_ONLY_PASSWORD_2026" | sudo tee /run/kali-mcp-cli-test-password >/dev/null
       - name: Verify native Agent applies root-owned browser origins
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: CI_BETA8_RELEASE_ONLY_PASSWORD_2026
