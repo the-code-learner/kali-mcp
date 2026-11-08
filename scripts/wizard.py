@@ -147,7 +147,7 @@ def is_complete(path: Path, *, require_marker: bool = True) -> bool:
     try:
         if require_marker:
             marker = path / "config.ready"
-            if marker.read_text(encoding="utf-8") != "v1\\n":
+            if marker.read_text(encoding="utf-8") != "v1\n":
                 return False
         stack, agent = parse_env(path / "stack.env"), parse_env(path / "agent.env")
         read_record(path / "superuser.json")
@@ -315,7 +315,7 @@ def main() -> None:
         marker = old / "config.ready"
         if marker.exists() or not is_complete(old, require_marker=False):
             raise SystemExit("Refusing to migrate incomplete legacy config or overwrite existing marker")
-        write_private(marker, "v1\\n")
+        write_private(marker, "v1\n")
         if not is_complete(old):
             marker.unlink(missing_ok=True)
             raise SystemExit("Migration post-check failed")
