@@ -22,6 +22,7 @@ STATE_DIR = Path("/var/lib/kali-mcp")
 INSTALLER = Path("/opt/kali-mcp/current/scripts/install-hybrid.sh")
 CURRENT = Path("/opt/kali-mcp/current")
 INSTALL_LOG = Path("/var/log/kali-mcp/install.log")
+SUPERVISOR_LOG = Path("/var/log/kali-mcp/update-supervisor.log")
 PHASE_MAP = {
     "preflight": "preflight", "download": "download", "source": "download",
     "backup": "backup", "wizard": "configuration",
@@ -68,15 +69,15 @@ def run(tag: str) -> None:
         env["KALI_MCP_VERSION"] = tag
         # The installer runs a fixed audited Bash script; arguments cannot be
         # provided by the MCP client.
+        phase = "preflight"
         try:
             INSTALL_LOG.parent.mkdir(parents=True, exist_ok=True)
             before = INSTALL_LOG.stat().st_size if INSTALL_LOG.exists() else 0
-            with open("/var/log/kali-mcp/update-supervisor.log", "a", encoding="utf-8") as transcript:
+            with SUPERVISOR_LOG.open("a", encoding="utf-8") as transcript:
                 os.chmod(transcript.name, 0o600)
                 proc = subprocess.Popen(["/bin/bash", str(INSTALLER), "--upgrade"],
                                         env=env, stdin=subprocess.DEVNULL,
                                         stdout=transcript, stderr=subprocess.STDOUT)
-                phase = "preflight"
                 while proc.poll() is None:
                     try:
                         with INSTALL_LOG.open("r", encoding="utf-8", errors="replace") as stream:
@@ -105,7 +106,8 @@ def run(tag: str) -> None:
         except BaseException as exc:
             try:
                 after = CURRENT.resolve() if CURRENT.is_symlink() else None
-                restored = previous is not None and after == previous
+                restored = (previous is not None and after == previous and
+                            phase in {"activation", "healthcheck"})
             except OSError:
                 restored = False
             state = "rolled_back" if restored else "failed"
