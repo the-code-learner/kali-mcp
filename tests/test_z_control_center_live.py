@@ -137,11 +137,10 @@ def test_batch_settings_honors_csrf_and_never_handles_scope(tmp_path, monkeypatc
         hidden = client.post("/settings/deployment",
             data={**valid, "changes": json.dumps({"KALI_MCP_SUPERUSER_FILE": "/tmp/key"})},
             headers={"Accept": "text/html"})
-        # Schema validation occurs independently inside the Host Agent.
-        assert hidden.status_code == 303
-        assert requests[-1][0] == "deployment_settings_update"
-        assert requests[-1][1]["changes"] == {"KALI_MCP_SUPERUSER_FILE": "/tmp/key"}
-        requests.clear()
+        # The browser-facing route rejects installer-owned variables before
+        # they ever reach the independently validating root Native Agent.
+        assert hidden.status_code == 400
+        assert requests == []
 
         denied = client.post("/settings/deployment",
             data={**valid, "changes": json.dumps({"KALI_MCP_ALLOW_ALL_TARGETS": "true"})},
