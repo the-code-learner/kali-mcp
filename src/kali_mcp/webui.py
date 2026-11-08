@@ -248,8 +248,11 @@ class UI:
 
     def _csrf(self, request: Request, submitted: str):
         if not request.state.csrf or not secrets.compare_digest(request.state.csrf, submitted):
-            return self._form_failure(request,
-                "The form is no longer valid. Reload the dashboard and retry.", 403)
+            if self._html_form(request):
+                return self._form_failure(request,
+                    "The form is no longer valid. Reload the dashboard and retry.", 403)
+            return JSONResponse({"error": "Invalid CSRF token"}, status_code=403,
+                                headers={"Cache-Control": "no-store"})
         return None
 
     async def _confirm_token_action(self, request: Request, password: str) -> bool:
