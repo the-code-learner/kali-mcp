@@ -254,6 +254,14 @@ class UI:
         if not await self._confirm_token_action(request, str(form.get("password") or "")):
             return JSONResponse({"error": "Superuser confirmation required"}, status_code=403)
         try:
+            browser_origin = str(form.get("browser_origin") or "").strip()
+            if browser_origin:
+                browser_origin = validate_browser_origin(browser_origin)
+                if browser_origin not in self.cfg.browser_origins:
+                    return self._browser_notice(
+                        "Browser origin not authorized",
+                        "First authorize " + browser_origin +
+                        " in the MCP Browser Origins / CORS section, then create your token.", 409)
             names = [v.strip() for v in str(form.get("allowed_tools") or "").split(",") if v.strip()]
             token_id, token = self.store.create_api_token(
                 str(form.get("name") or ""), self.cfg.resource,
@@ -496,18 +504,52 @@ class UI:
                if t["last_used"] else "Never")
             + "</td><td>" + html.escape(", ".join(json.loads(t["allowed_tools"])) or "All")
             + "</td><td>"
-            + (('<form method="post" action="/api/v1/api-tokens/revoke">'
+            + (('<form class="token-action" method="post" action="/api/v1/api-tokens/revoke">
                 '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">'
                 '<input type="hidden" name="token_id" value="' + html.escape(t["token_id"]) + '">'
                 '<input type="password" name="password" placeholder="Superuser password" required>'
                 '<button type="submit">Revoke</button></form>'
-                '<form method="post" action="/api/v1/api-tokens/rotate">'
+                '<form class="token-action" method="post" action="/api/v1/api-tokens/rotate">'
                 '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">'
                 '<input type="hidden" name="token_id" value="' + html.escape(t["token_id"]) + '">'
                 '<input type="number" name="days" min="1" max="90" value="30" required>'
                 '<input type="password" name="password" placeholder="Superuser password" required>'
                 '<button type="submit">Rotate</button></form>') if not t["revoked"] else "")
             + "</td></tr>" for t in self.store.list_api_tokens(100))
+        active_origins = self.cfg.browser_origins
+        host_origins = list(active_origins)
+        deploy_state = "unknown"
+        deploy_detail = ""
+        if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() == "true":
+            try:
+                from .broker_client import call
+                observed = await asyncio.to_thread(
+                    call, self.cfg.broker_socket, "browser_origins_status", timeout=3)
+                host_origins = observed.get("configured", host_origins)
+                deploy = observed.get("deployment", {})
+                deploy_state = str(deploy.get("state") or "unknown")
+                deploy_detail = str(deploy.get("detail") or "")[:180]
+            except Exception:
+                deploy_state = "Host Agent status unavailable"
+        origin_items = "".join(
+            '<li class="cors-origin-item"><code>' + html.escape(origin) +
+            '</code><form method="post" action="/api/v1/browser-origins" class="origin-remove">' +
+            '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">' +
+            '<input type="hidden" name="action" value="remove">' +
+            '<input type="hidden" name="origin" value="' + html.escape(origin, quote=True) + '">' +
+            '<input type="password" name="password" required placeholder="Superuser password" autocomplete="current-password" aria-label="Superuser password to remove origin">' +
+            '<button type="submit">Remove</button></form></li>'
+            for origin in host_origins
+        ) or "<li>No additional browser origins authorized.</li>"
+        active_label = ", ".join(active_origins) or "none (fail closed)"
+        configured_label = ", ".join(host_origins) or "none"
+        cors_notice = ""
+        if request.query_params.get("cors") == "scheduled":
+            cors_notice = ("Configuration scheduled; Core may restart. Refresh this page "
+                           "to see the active allowlist and deployment state.")
+        elif request.query_params.get("cors") == "unchanged":
+            cors_notice = "Origin list was already in the requested state."
+
         latest = (self.updates.status() if self.updates is not None else {}).get("latest")
         installed = installed_release_tag()
         comparison = is_update_available(installed, latest)
@@ -545,21 +587,60 @@ class UI:
         <p class="muted">Revocation invalidates all active bearer and refresh tokens for that client.</p>
         <table><thead><tr><th>Client</th><th>ID</th><th>State</th><th>Action</th></tr></thead>
         <tbody>{client_rows}</tbody></table></section>
-        <section><h2>MCP Clients &mdash; API Tokens</h2>
-         <p>API keys work on the same /mcp endpoint as OAuth Code + PKCE. Keys expire,
-         appear once, and never enable disabled host/root capabilities.</p>
-         <form action="/api/v1/api-tokens/create" method="post">
+        <section class="api-panel"><h2>MCP Browser Origins / CORS</h2>
+         <p class="muted">Only these exact HTTPS browser origins can connect directly to /mcp.
+         Origin authorization is NOT an API credential. Admin endpoints remain same-origin.</p>
+         <p><strong>Active in Core:</strong> <code>{html.escape(active_label)}</code></p>
+         <p><strong>Saved on Host:</strong> <code>{html.escape(configured_label)}</code></p>
+         <p class="muted" role="status">Deployment: {html.escape(deploy_state)}
+            {html.escape(deploy_detail)} {html.escape(cors_notice)}</p>
+         <ul class="cors-origins">{origin_items}</ul>
+         <form method="post" action="/api/v1/browser-origins" class="cors-form">
+           <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
+           <input type="hidden" name="action" value="add">
+           <label>Browser origin (exact HTTPS URL, no path)
+             <input type="url" name="origin" required maxlength="255"
+                    placeholder="https://llm.example.com"></label>
+           <label>Confirm superuser password
+             <input type="password" name="password" required autocomplete="current-password"></label>
+           <button type="submit">Authorize browser origin</button>
+         </form>
+         <h3>Check CORS / MCP connection</h3>
+         <p class="muted">Tests a real OPTIONS preflight. For SDK Host and MCP
+         initialize/tools/list tests, optionally paste a valid Bearer token.
+         This token is not logged, stored or shown in the result.</p>
+         <form method="post" action="/api/v1/browser-origins/check" class="cors-form">
+           <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
+           <label>Browser origin to test
+             <input type="url" name="origin" required maxlength="255"
+                    placeholder="https://llm.example.com"></label>
+           <label>Optional API Bearer token (not saved)
+             <input type="password" name="bearer" maxlength="512" autocomplete="off"></label>
+           <button type="submit">Check CORS</button>
+         </form>
+        </section>
+        <section class="api-panel"><h2>MCP Clients &mdash; API Tokens</h2>
+         <p>API tokens and OAuth Code + PKCE use the same /mcp endpoint. Tokens expire,
+         are shown once, and do not enable host/root. For browser clients, authorize
+         the origin in the section above before creating a token.</p>
+         <form action="/api/v1/api-tokens/create" method="post" class="api-token-form">
            <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
            <label>Client name<input name="name" maxlength="80" required placeholder="llama.cpp WebUI"></label>
            <label>Expires in days (1-90)<input type="number" min="1" max="90" name="days" value="30" required></label>
-           <label>Tool allowlist (comma-separated; blank permits all)
+           <label>Tool allowlist (blank permits all)
              <input name="allowed_tools" placeholder="system_status,tools_search"></label>
-           <label>Confirm superuser password<input type="password" name="password" required autocomplete="current-password"></label>
+           <label>Browser origin (optional; must already be authorized)
+             <input type="url" name="browser_origin" maxlength="255"
+                    placeholder="https://llm.example.com"></label>
+           <label>Confirm superuser password
+             <input type="password" name="password" required autocomplete="current-password"></label>
            <button type="submit">Create API Token (show once)</button>
          </form>
-         <table><thead><tr><th>Client</th><th>ID</th><th>Status</th><th>Expires</th>
+         <div class="table-scroll" role="region" aria-label="API tokens" tabindex="0">
+           <table><thead><tr><th>Client</th><th>ID</th><th>Status</th><th>Expires</th>
            <th>Last used</th><th>Tools</th><th>Action</th></tr></thead><tbody>{api_rows}</tbody></table>
-         </section>
+         </div>
+        </section>
          <section><h2>Audit</h2><pre id="audit">Loading ...</pre></section>
         </main><script src="/static/app.js?v={html.escape(installed or 'unknown', quote=True)}" defer></script></body></html>"""
         return HTMLResponse(body, headers={"Cache-Control": "no-store",
