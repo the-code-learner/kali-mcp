@@ -367,6 +367,11 @@ docker compose --env-file "$CONFIG/stack.env" -f "$ROOT/current/kali-mcp-hybrid.
 phase healthcheck
 docker compose --env-file "$CONFIG/stack.env" -f "$ROOT/current/kali-mcp-hybrid.yml" \
   up -d --force-recreate --wait --wait-timeout 300
+# A healthy HTTP listener alone does NOT prove the root Native Host Agent
+# socket is reachable from the unprivileged Core. After a service restart,
+# Docker may otherwise retain a stale bind mount of /run/kali-mcp-agent.
+docker exec kali-mcp-core /opt/venv/bin/python -c \
+  "import sys; sys.path.insert(0, '/opt/kali-mcp/current/src'); from kali_mcp.broker_client import call; assert call('/run/kali-mcp-agent/agent.sock','ping',timeout=8).get('broker') == 'systemd-host-agent'"
 ACTIVATED=false
 trap - ERR
 echo

@@ -79,12 +79,39 @@ async def snapshot(ui, request):
     oauth = [{"name": row["name"], "id": row["client_id"],
               "status": "Attivo" if row["active"] else "Revocato / scaduto"}
              for row in ui.store.list_clients(100)]
+    # Ping can fail transiently even when another authenticated IPC call
+    # returns. Distinguish the reachability of Agent from its settings inventory.
+    agent_online = any(isinstance(item, dict) and item.get("ok") for item in
+                       (agent, inventory, cors, upgrade))
     fields = inventory.get("fields", []) if inventory.get("ok") else []
+    inventory_available = bool(inventory.get("ok")) and all(
+        any(field.get("name") == key for field in fields)
+        for key in ("KALI_MCP_ALLOWED_CIDRS", "KALI_MCP_DENIED_CIDRS",
+                    "KALI_MCP_ALLOW_ALL_TARGETS"))
+    # The deployment inventory comes exclusively from the root Native Agent.
+    # If it is unavailable show the full setting schema with *unavailable*
+    # values (never invented defaults) and disable all changes. A Core that
+    # still serves HTTP is not proof that its privileged Agent is healthy.
+    if not inventory_available:
+        fields = [
+            {"name": field.name, "value": "Non disponibile",
+             "editable": False, "group": field.group,
+             "type": field.kind, "description": field.description,
+             "source": "unavailable"}
+            for field in FIELD_MAP.values()
+        ] + [
+            {"name": name, "value": "(non disponibile)",
+             "editable": False, "group": "Installer / internal",
+             "type": "readonly", "description": desc,
+             "source": "unavailable"}
+            for name, desc in READONLY_REASONS.items()
+        ]
     configured = cors.get("configured", []) if cors.get("ok") else []
     return JSONResponse({
         "ok": True,
         "core": {"online": True, "version": installed},
-        "agent": {"online": bool(agent.get("ok")),
+        "agent": {"online": bool(agent_online),
+                  "inventory_available": inventory_available,
                   "name": agent.get("broker", "Native Host Agent")},
         "updates": {**release, "installed": installed,
                     "available": comparison, "install_allowed": bool(
@@ -92,7 +119,13 @@ async def snapshot(ui, request):
                     "guidance": guidance,
                     "run": upgrade.get("update", {"state": "unknown",
                                                  "phase": "scheduled"})},
-        "deployment": inventory.get("deployment", {}),
+        "deployment": inventory.get("deployment", {"state": "unavailable"}),
+        "effective_scope": {
+            "allow_all": bool(ui.cfg.allow_all_targets),
+            "allowed": list(ui.cfg.allowed_cidrs),
+            "denied": list(ui.cfg.denied_cidrs),
+            "source": "running Core configuration",
+        },
         "fields": fields,
         "runtime": current,
         "origins": {"configured": configured,
@@ -102,6 +135,6 @@ async def snapshot(ui, request):
         "oauth": oauth,
         "jobs": ui.store.list_jobs(100),
         "audit": ui.store.list_audit(60),
-        "flags": {"admin": True, "host_agent": bool(agent.get("ok"))},
+        "flags": {"admin": True, "host_agent": bool(agent_online)},
     }, headers={"Cache-Control": "private, no-store",
                 "X-Content-Type-Options": "nosniff"})

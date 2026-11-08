@@ -19,6 +19,12 @@ RestartSec=3
 UMask=0007
 RuntimeDirectory=kali-mcp-agent
 RuntimeDirectoryMode=0750
+# Docker bind-mounts the DIRECTORY, not the socket file. Without this setting
+# systemd removes/recreates /run/kali-mcp-agent on service restart, leaving
+# running Core containers bound to the old now-empty directory inode.
+# Preserve the directory throughout stop/restart on this boot; the Agent
+# still replaces its socket on each start and the Core mount remains read-only.
+RuntimeDirectoryPreserve=yes
 LimitNOFILE=16384
 TimeoutStopSec=10
 KillMode=control-group

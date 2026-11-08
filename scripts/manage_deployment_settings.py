@@ -126,6 +126,17 @@ def activate(updates: dict[str, str]) -> None:
             time.sleep(0.25)
         else:
             raise RuntimeError("Host Agent socket not ready after restart")
+        # One real broker ping *inside the already-running Core* is necessary:
+        # checking the host's socket alone cannot detect a stale Docker bind
+        # mount after systemd recreates its RuntimeDirectory.
+        subprocess.run([
+            "docker", "exec", "kali-mcp-core", "/opt/venv/bin/python",
+            "-c",
+            "import sys;sys.path.insert(0,'/opt/kali-mcp/current/src');"
+            "from kali_mcp.broker_client import call;"
+            "assert call('/run/kali-mcp-agent/agent.sock','ping',timeout=5)"
+            ".get('broker') == 'systemd-host-agent'",
+        ], check=True, timeout=15)
 
 
 def apply_changes(requested: dict[str, str]) -> None:

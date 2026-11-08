@@ -11,7 +11,7 @@ import html
 import json
 import os
 
-from starlette.responses import HTMLResponse, RedirectResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .deployment_settings import FIELD_MAP
 
@@ -203,6 +203,17 @@ async def save(ui, request):
         ui.store.audit("webui:" + request.state.admin_username,
                         "deployment.update.schedule", "allow",
                         ",".join(sorted(changes))[:150])
+        # The SPA needs an explicit *scheduled* result. A 303 followed by a
+        # successful GET used to look like a completed settings change even
+        # while the detached installer had not yet applied anything.
+        if "application/json" in request.headers.get("accept", "").lower():
+            scheduled = bool(answer.get("scheduled"))
+            unchanged = bool(answer.get("unchanged"))
+            return JSONResponse({"ok": True, "scheduled": scheduled,
+                                 "unchanged": unchanged,
+                                 "keys": sorted(changes)},
+                                status_code=202 if scheduled else 200,
+                                headers={"Cache-Control": "no-store"})
         return RedirectResponse("/settings/deployment?apply=" +
             ("unchanged" if answer.get("unchanged") else "scheduled"),
             status_code=303, headers={"Cache-Control": "no-store"})
