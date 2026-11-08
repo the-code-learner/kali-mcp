@@ -312,7 +312,7 @@ function liveGuide(){
         'Autorizza prima CORS, poi crea un token o OAuth e verifica la connessione.',
         'Controlla il ceiling, usa il toggle runtime e conferma con password superuser.'][i]+
        '</p></div>'+button('Apri','scenario','small','data-value="'+
-       ['updates','scope','cors','settings'][i]+'")+'</div>')).join('')+
+       ['updates','scope','cors','settings'][i]+'"')+'</div>')).join('')+
    section('Versione classica')+
    card('<p>La precedente dashboard rimane disponibile per diagnosi e rollback UX.</p>'+
         '<a href="/legacy" class="btn">Apri dashboard classica</a>');
