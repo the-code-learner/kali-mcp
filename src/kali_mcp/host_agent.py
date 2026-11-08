@@ -177,19 +177,17 @@ class NativeAgent(Broker):
                 raise BrokerDenied("Invalid browser-origin action")
             try:
                 origin = validate_browser_origin(data.get("origin"))
-                current = list(parse_browser_origins(
-                    parse_env(Path("/etc/kali-mcp/stack.env")).get("KALI_MCP_BROWSER_ORIGINS", "")))
-                if action == "add":
-                    if origin not in current:
-                        current.append(origin)
-                elif origin in current:
+                previous = parse_browser_origins(
+                    parse_env(Path("/etc/kali-mcp/stack.env")).get("KALI_MCP_BROWSER_ORIGINS", ""))
+                current = list(previous)
+                if action == "add" and origin not in current:
+                    current.append(origin)
+                elif action == "remove" and origin in current:
                     current.remove(origin)
                 desired = parse_browser_origins(",".join(current))
             except (ValueError, OSError) as exc:
                 raise BrokerDenied("Invalid browser-origin configuration: " + str(exc)[:160]) from exc
-            if (action == "add" and origin in current and
-                    desired == tuple(parse_browser_origins(
-                        parse_env(Path("/etc/kali-mcp/stack.env")).get("KALI_MCP_BROWSER_ORIGINS", "")))):
+            if desired == previous:
                 return {"ok": True, "unchanged": True, "configured": list(desired)}
             unit = "kali-mcp-origins-" + uuid4().hex[:12]
             argv = ["systemd-run", "--collect", "--on-active=3s",
