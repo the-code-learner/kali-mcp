@@ -34,6 +34,21 @@ def test_api_tokens_hash_expiry_revocation_and_oauth_isolation(tmp_path):
     assert store.revoke_api_token(token_id)
     assert store.verify_api_token(secret, resource, fingerprint) is None
     assert not store.revoke_api_token(token_id)
+    rotatable_id, rotatable = store.create_api_token(
+        "rotate-me", resource, fingerprint, days=30,
+        allowed_tools=["system_status"])
+    new_id, new_token = store.rotate_api_token(
+        rotatable_id, resource, fingerprint, days=7)
+    assert new_id != rotatable_id and new_token != rotatable
+    assert store.verify_api_token(rotatable, resource, fingerprint) is None
+    assert store.verify_api_token(new_token, resource, fingerprint)["allowed_tools"] == ["system_status"]
+    assert store.list_api_tokens()[0]["token_id"] == new_id
+    try:
+        store.rotate_api_token(rotatable_id, resource, fingerprint)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Revoked key could be rotated a second time")
     second, token2 = store.create_api_token("expiring", resource, fingerprint, days=1)
     with store.transaction():
         store.db.execute("UPDATE api_tokens SET expires=? WHERE token_id=?",
@@ -152,6 +167,7 @@ def test_webui_token_creation_one_time_and_csrf(tmp_path, monkeypatch):
         Route("/", ui.dashboard, methods=["GET"]),
         Route("/api/v1/api-tokens/create", ui.create_api_token, methods=["POST"]),
         Route("/api/v1/api-tokens/revoke", ui.revoke_api_token, methods=["POST"]),
+        Route("/api/v1/api-tokens/rotate", ui.rotate_api_token, methods=["POST"]),
     ]))
     with TestClient(app, base_url=cfg.base_url, follow_redirects=False) as client:
         login = client.post("/login", data={
@@ -181,4 +197,18 @@ def test_webui_token_creation_one_time_and_csrf(tmp_path, monkeypatch):
             "csrf": csrf, "password": data["password"],
             "token_id": entry["token_id"]}).status_code == 303
         assert store.verify_api_token(token, cfg.resource, admin._credential()[1]) is None
+        # Rotating a different token is atomic and reveals only the replacement.
+        original = client.post("/api/v1/api-tokens/create", data=data)
+        assert original.status_code == 200
+        old_secret = re.search(r"kmp_[0-9a-f]{32}\.[A-Za-z0-9_-]{64}", original.text).group()
+        old_id = store.list_api_tokens()[0]["token_id"]
+        rotated = client.post("/api/v1/api-tokens/rotate", data={
+            "csrf": csrf, "password": data["password"],
+            "token_id": old_id, "days": "7"})
+        assert rotated.status_code == 200
+        new_secret = re.search(r"kmp_[0-9a-f]{32}\.[A-Za-z0-9_-]{64}", rotated.text).group()
+        assert old_secret != new_secret
+        assert store.verify_api_token(old_secret, cfg.resource, admin._credential()[1]) is None
+        assert store.verify_api_token(new_secret, cfg.resource, admin._credential()[1])
+        assert new_secret not in client.get("/").text
     store.close()
