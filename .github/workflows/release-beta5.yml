@@ -36,9 +36,7 @@ jobs:
           python -m pip install -r requirements.txt pytest PyYAML
           python -m compileall -q src scripts tests
           pytest -q
-          docker compose -f kali-mcp-hybrid.yml config --quiet
-        env:
-          KALI_MCP_AGENT_GID: "1000"
+          KALI_MCP_AGENT_GID=1000 docker compose -f kali-mcp-hybrid.yml config --quiet
       - name: Install release candidate in hybrid mode
         run: |
           sudo env KALI_MCP_VERSION="$GITHUB_SHA" \
