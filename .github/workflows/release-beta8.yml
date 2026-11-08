@@ -1,0 +1,131 @@
+name: Publish Kali MCP beta.8 (validated hybrid prerelease)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release-beta8.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-kali-mcp-beta8
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.repository == 'the-code-learner/kali-mcp'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate version, release assets, scripts and Python tests
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "0.1.0-beta.8"
+          test -s docs/BETA8_RELEASE_NOTES.md
+          test -s kali-mcp-hybrid.yml
+          test -s scripts/install-hybrid.sh
+          bash -n scripts/install-hybrid.sh
+          python -m pip install -r requirements.txt pytest PyYAML
+          python -m compileall -q src scripts tests
+          pytest -q
+          KALI_MCP_AGENT_GID=1000 docker compose -f kali-mcp-hybrid.yml config --quiet
+      - name: Install release candidate in hybrid mode
+        run: |
+          sudo env KALI_MCP_VERSION="$GITHUB_SHA" \
+            KALI_MCP_RELEASE_CHANNEL=beta \
+            KALI_MCP_ACCESS_MODE=local \
+            KALI_MCP_BROWSER_ORIGINS=https://llm.example.test \
+            KALI_MCP_ADMIN_PASSWORD=CI_BETA8_RELEASE_ONLY_PASSWORD_2026 \
+            bash scripts/install-hybrid.sh --non-interactive
+          sudo systemctl is-active --quiet kali-mcp-agent.service
+          test "$(docker inspect --format '{{.HostConfig.Privileged}}' kali-mcp-core)" = false
+          test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
+          curl -fsS http://127.0.0.1:8787/healthz
+      - name: Stage private temporary CI credential
+        run: |
+          sudo install -m 0600 /dev/null /run/kali-mcp-cli-test-password
+          echo "CI_BETA8_RELEASE_ONLY_PASSWORD_2026" | sudo tee /run/kali-mcp-cli-test-password >/dev/null
+      - name: Verify native Agent applies root-owned browser origins
+        env:
+          KALI_MCP_TEST_ADMIN_PASSWORD: CI_BETA8_RELEASE_ONLY_PASSWORD_2026
+          KALI_MCP_SMOKE_BROWSER_ORIGINS: "true"
+        run: sudo python3 scripts/smoke_browser_origins.py --ephemeral-ci
+      - name: Verify OAuth, API key, CORS and live MCP transport
+        env:
+          KALI_MCP_TEST_ADMIN_PASSWORD: CI_BETA8_RELEASE_ONLY_PASSWORD_2026
+          KALI_MCP_SMOKE_BROWSER_ORIGIN: https://llm.example.test
+          KALI_MCP_SMOKE_TEST_API_TOKENS: "true"
+        run: python3 scripts/smoke_http.py
+      - name: Verify idempotent upgrade retains superuser and persistent configuration
+        run: |
+          set -euo pipefail
+          before_user="$(sudo sha256sum /etc/kali-mcp/superuser.json | cut -d' ' -f1)"
+          before_stack="$(sudo sha256sum /etc/kali-mcp/stack.env | cut -d' ' -f1)"
+          # Reproduce beta.4-originated installs with valid credentials but
+          # no config.ready. An upgrade from a non-TTY systemd unit must
+          # migrate the marker, not re-open the interactive wizard.
+          sudo rm -f /etc/kali-mcp/config.ready
+          sudo env KALI_MCP_VERSION="$GITHUB_SHA" \
+            bash scripts/install-hybrid.sh --upgrade
+          test "$before_user" = "$(sudo sha256sum /etc/kali-mcp/superuser.json | cut -d' ' -f1)"
+          test "$before_stack" = "$(sudo sha256sum /etc/kali-mcp/stack.env | cut -d' ' -f1)"
+          sudo test -f /etc/kali-mcp/config.ready
+          sudo test -f /var/log/kali-mcp/install.log
+          test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          sudo systemctl status kali-mcp-agent.service --no-pager || true
+          sudo journalctl -u kali-mcp-agent.service -n 100 --no-pager || true
+          docker logs --tail 100 kali-mcp-core || true
+      - name: Stop ephemeral test services
+        if: always()
+        run: |
+          sudo systemctl stop kali-mcp-agent.service || true
+          if test -f /etc/kali-mcp/stack.env; then
+            sudo docker compose --env-file /etc/kali-mcp/stack.env \
+              -f /opt/kali-mcp/current/kali-mcp-hybrid.yml down -v || true
+          fi
+
+  publish:
+    needs: [validate]
+    if: github.repository == 'the-code-learner/kali-mcp'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build versioned release assets and SHA256 manifest
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "0.1.0-beta.8"
+          cp scripts/install-hybrid.sh install-hybrid.sh
+          sha256sum install-hybrid.sh kali-mcp-hybrid.yml > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Publish immutable prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v0.1.0-beta.8
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $TAG already exists. Refusing to overwrite."
+            exit 1
+          fi
+          gh release create "$TAG" install-hybrid.sh kali-mcp-hybrid.yml SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Kali MCP v0.1.0-beta.8 — Public MCP Host and Browser CORS Management" \
+            --notes-file docs/BETA8_RELEASE_NOTES.md \
+            --prerelease
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json url,tagName,isPrerelease

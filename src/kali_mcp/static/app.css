@@ -1,2 +1,32 @@
 :root{color-scheme:dark;font:15px/1.5 system-ui,-apple-system,sans-serif;background:#0d1523;color:#e7edf6}*{box-sizing:border-box}body{margin:0}header{display:flex;align-items:center;justify-content:space-between;padding:1rem 5vw;border-bottom:1px solid #2c3e55;background:#121f32}header h1{font-size:1.35rem;margin:0}header small{font-size:.8rem;color:#93a5bd}a{color:#8cc5fc}main{max-width:1240px;margin:2rem auto;padding:0 1.2rem;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.2rem}section{background:#152238;border:1px solid #2d4261;border-radius:14px;padding:1.2rem;min-width:0}section:nth-child(2){grid-column:span 2}h2{font-size:1.05rem;margin:.1rem 0 1rem}p{margin:.5rem 0 1rem}.muted{font-size:.86rem;color:#9fb0c5}.warning{color:#ffca86}button{padding:.6rem 1rem;background:#307dc2;color:white;border:0;border-radius:8px;cursor:pointer}button:disabled{opacity:.4;cursor:not-allowed}input{background:#0b1525;color:white;border:1px solid #526785;border-radius:6px;padding:.55rem}table{width:100%;border-collapse:collapse;text-align:left;display:block;overflow-x:auto}th,td{padding:.6rem;border-bottom:1px solid #354863;white-space:nowrap}th{color:#96b5d8}.toggle{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.8rem;padding:.9rem 0;border-bottom:1px solid #344965}.toggle .consent{flex-basis:100%;font-size:.82rem;color:#ffc184}.toggle input{margin-right:.4rem}pre{overflow:auto;font-size:.75rem;max-height:200px;background:#101b2b;padding:.8rem;border-radius:6px}.login{display:block;max-width:460px}.login form{display:grid;gap:1rem}.login label{display:grid;gap:.5rem}main.report{display:grid;grid-template-columns:1fr}.report section{width:100%}.job-output{max-height:52vh;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;font:13px/1.6 ui-monospace,monospace;border:1px solid #314662}.report ol{line-height:2}
 @media(max-width:780px){main{grid-template-columns:1fr}section:nth-child(2){grid-column:span 1}header{padding:1rem}td,th{padding:.4rem}}
+
+/* The CORS and token workflows are full-width panels; fields must never
+   collapse into a single cramped row on desktop or obscure mobile actions. */
+.api-panel{grid-column:span 2}
+.api-token-form,.cors-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.9rem 1.1rem;align-items:end;margin:1rem 0}
+.api-token-form>label,.cors-form>label{display:flex;flex-direction:column;gap:.35rem;min-width:0;font-size:.92rem}
+.api-token-form input,.cors-form input{width:100%;min-width:0}
+.api-token-form>button,.cors-form>button{justify-self:start;align-self:end}
+.api-panel h3{font-size:1rem;margin:1.5rem 0 .4rem}
+.api-panel code{overflow-wrap:anywhere}
+.cors-origins{padding-left:1.15rem;margin:.8rem 0}
+.cors-origin-item{padding:.45rem 0;border-bottom:1px solid #344965}
+.origin-remove{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:.4rem 0}
+.origin-remove input{width:min(240px,100%)}
+.table-scroll{width:100%;max-width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;border-radius:6px;border:1px solid #354863}
+.table-scroll table{display:table;width:100%;min-width:690px}
+.table-scroll th,.table-scroll td{vertical-align:top;padding:.6rem;max-width:280px}
+.table-scroll th:last-child,.table-scroll td:last-child{position:sticky;right:0;background:#152238;border-left:1px solid #354863;min-width:205px}
+.token-action{display:flex;flex-wrap:wrap;gap:.35rem;margin:.1rem 0 .5rem;align-items:center}
+.token-action input[type=password]{width:150px;min-width:0}
+.token-action input[type=number]{width:64px}
+.token-action button{padding:.42rem .68rem;white-space:nowrap}
+@media(max-width:780px){
+  .api-panel{grid-column:span 1}
+  .api-token-form,.cors-form{grid-template-columns:minmax(0,1fr)}
+  .table-scroll th:last-child,.table-scroll td:last-child{position:static}
+  .table-scroll table{min-width:650px}
+  .origin-remove{flex-direction:column;align-items:stretch}
+  .origin-remove input{width:100%}
+}

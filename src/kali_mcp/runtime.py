@@ -153,7 +153,8 @@ class SecurityGate:
         if method == "POST" and path in {"/login", "/authorize", "/logout",
                                         "/api/v1/settings", "/api/v1/clients/revoke", "/api/v1/updates/check",
                                         "/api/v1/updates/install", "/api/v1/api-tokens/create",
-                                        "/api/v1/api-tokens/revoke", "/api/v1/api-tokens/rotate"}:
+                                        "/api/v1/api-tokens/revoke", "/api/v1/api-tokens/rotate",
+                                        "/api/v1/browser-origins", "/api/v1/browser-origins/check"}:
             admin_origins = {cfg.base_url, "http://localhost:8787", "http://127.0.0.1:8787"}
             referrer = headers.get("referer", "")
             referer_ok = any(referrer.startswith(base + "/") for base in admin_origins)
@@ -321,12 +322,28 @@ async def lifespan(app):
 
 from mcp.server.transport_security import TransportSecuritySettings
 
-_host = urlparse(cfg.base_url).hostname
+
+def sdk_allowed_hosts(public_url: str) -> list[str]:
+    """SDK DNS-rebinding allowlist: match bare HTTPS Host AND explicit ports.
+
+    The MCP SDK's 'hostname:*' wildcard does not match a portless Host.
+    Keep both the origin's exact hostname and its port variant; do NOT
+    disable the SDK's DNS-rebinding protection or trust X-Forwarded-Host.
+    """
+    public_host = urlparse(public_url).hostname
+    if not public_host:
+        raise ValueError("KALI_MCP_PUBLIC_URL requires a valid host")
+    if ":" in public_host:
+        public_host = "[" + public_host + "]"
+    hosts = ("127.0.0.1", "localhost", "kali-mcp-core", public_host)
+    return list(dict.fromkeys(item for host in hosts for item in (host, host + ":*")))
+
+
 _mcp_app = core.mcp.streamable_http_app(
     streamable_http_path="/mcp", stateless_http=True, json_response=True,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=["127.0.0.1:*", "localhost:*", "kali-mcp-core:*", f"{_host}:*"],
+        allowed_hosts=sdk_allowed_hosts(cfg.base_url),
         allowed_origins=["http://localhost:*", "http://127.0.0.1:*", cfg.base_url, *cfg.browser_origins],
     ),
 )
@@ -352,6 +369,8 @@ app = SecurityGate(Starlette(
         Route("/api/v1/api-tokens/create", ui.create_api_token, methods=["POST"]),
         Route("/api/v1/api-tokens/revoke", ui.revoke_api_token, methods=["POST"]),
         Route("/api/v1/api-tokens/rotate", ui.rotate_api_token, methods=["POST"]),
+        Route("/api/v1/browser-origins", ui.browser_origins_update, methods=["POST"]),
+        Route("/api/v1/browser-origins/check", ui.browser_origins_check, methods=["POST"]),
         Route("/api/v1/updates/check", ui.update_check, methods=["POST"]),
         Route("/api/v1/updates/install", ui.update_install, methods=["POST"]),
         Route("/jobs/{job_id}", ui.job_report, methods=["GET"]),

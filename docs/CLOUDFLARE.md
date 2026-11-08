@@ -36,7 +36,7 @@ and a separate Kali MCP administrator login before authorizing a client.
 Cloudflare path precedence and this deployment's OAuth login callback behavior
 must be integration-tested before public exposure.
 
-## API tokens + llama.cpp browser integration (beta.5)
+## API tokens + llama.cpp browser integration (beta.8)
 
 OAuth Authorization Code + PKCE S256 is preserved for interactive clients;
 self-contained API tokens are an **additional** credential type on the SAME `/mcp` endpoint.
@@ -45,10 +45,22 @@ Do not bypass `/api/v1/api-tokens/*`, `/login`, `/logout`, or the dashboard.
 
 - Create a 30-day API token under **Dashboard → MCP Clients → API Tokens**.
   Confirm the current superuser password and copy the token immediately.
-- Set `KALI_MCP_BROWSER_ORIGINS=https://llm.davidecasalin.it` in
-  `/etc/kali-mcp/stack.env`, then recreate the Core. Only exact HTTPS
-  origins are permitted, never a wildcard or `Origin: null` without
-  the administrative form checks.
+- In beta.8 and later, open **Dashboard → MCP Browser Origins / CORS**,
+  authorize the exact HTTPS origin (such as
+  `https://llm.davidecasalin.it`) with superuser confirmation, and
+  verify **Active in Core** matches **Saved on Host** after the controlled
+  Core-only restart. This stores the allowlist in both protected environment
+  files, performs a health check and attempts rollback on failure; no SSH
+  editing or extra container is required.
+- Creating a browser API Token does **not** grant CORS access. Grant the
+  browser origin first; keep the token separate and private.
+- Optionally use **Check CORS** on the dashboard. An OPTIONS response of
+  HTTP 204 is insufficient to prove MCP works: with a valid Bearer token,
+  the check also exercises `POST initialize` and `tools/list` with the
+  **portless public Host header**. Without a token, Host/MCP checks are
+  intentionally reported as not tested.
+- Only exact HTTPS origins are permitted (localhost HTTP is allowed for
+  local development). Never set a wildcard or disable DNS-rebinding checks.
 - In llama.cpp WebUI set MCP URL `https://kali-mcp.warebench.com/mcp`,
   transport `streamable_http`, and use `Authorization: Bearer <one-time-token>`.
   Alternatively, use `X-Kali-MCP-API-Key: <one-time-token>`.

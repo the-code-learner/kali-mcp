@@ -11,12 +11,15 @@ import os
 from pathlib import Path
 import secrets
 import time
+import urllib.request
+import urllib.error
 from urllib.parse import urlparse
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse, FileResponse
 
 from .config import Config
+from .browser_origins import validate_browser_origin
 from .policy import Policy, PolicyDenied
 from .releases import UpdateChecker, installed_release_tag, is_update_available
 from .store import Store, digest
@@ -251,6 +254,14 @@ class UI:
         if not await self._confirm_token_action(request, str(form.get("password") or "")):
             return JSONResponse({"error": "Superuser confirmation required"}, status_code=403)
         try:
+            browser_origin = str(form.get("browser_origin") or "").strip()
+            if browser_origin:
+                browser_origin = validate_browser_origin(browser_origin)
+                if browser_origin not in self.cfg.browser_origins:
+                    return self._browser_notice(
+                        "Browser origin not authorized",
+                        "First authorize " + browser_origin +
+                        " in the MCP Browser Origins / CORS section, then create your token.", 409)
             names = [v.strip() for v in str(form.get("allowed_tools") or "").split(",") if v.strip()]
             token_id, token = self.store.create_api_token(
                 str(form.get("name") or ""), self.cfg.resource,
@@ -293,6 +304,156 @@ class UI:
         if not revoked:
             return JSONResponse({"error": "API token not found or already revoked"}, status_code=404)
         return RedirectResponse("/", status_code=303)
+
+    @staticmethod
+    def _browser_notice(title: str, message: str, code: int = 200) -> HTMLResponse:
+        body = ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
+          <title>Kali MCP — Browser CORS</title>
+          <meta name="viewport" content="width=device-width">
+          <link rel="stylesheet" href="/static/app.css"></head>
+          <body><main class="report"><section><h2>""" +
+          html.escape(title) + "</h2><p>" + html.escape(message) +
+          """</p><a href="/">Return to dashboard</a></section></main></body></html>""")
+        return HTMLResponse(body, status_code=code, headers={
+            "Cache-Control": "no-store", "Referrer-Policy": "same-origin",
+            "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'",
+        })
+
+    async def browser_origins_update(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        form = await request.form()
+        if (error := self._csrf(request, str(form.get("csrf") or ""))):
+            return error
+        if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() != "true":
+            return self._browser_notice("Unavailable", "Native Host Agent is required.", 403)
+        try:
+            origin = validate_browser_origin(str(form.get("origin") or ""))
+            action = str(form.get("action") or "")
+            if action not in {"add", "remove"}:
+                raise ValueError("Invalid action")
+            password = str(form.get("password") or "")
+            if not password or len(password) > 256:
+                raise ValueError("Superuser password confirmation is required")
+            from .broker_client import call
+            outcome = await asyncio.to_thread(
+                call, self.cfg.broker_socket, "browser_origins_update", {
+                    "origin": origin, "action": action,
+                    "superuser_name": request.state.admin_username,
+                    "superuser_password": password,
+                }, timeout=30)
+            self.store.audit("webui:" + request.state.admin_username,
+                             "browser_origins." + action, "allow", origin)
+            if outcome.get("unchanged"):
+                return RedirectResponse("/?cors=unchanged", status_code=303)
+            return RedirectResponse("/?cors=scheduled", status_code=303)
+        except (ValueError, OSError, RuntimeError) as exc:
+            self.store.audit("webui", "browser_origins.update", "deny",
+                             type(exc).__name__)
+            return self._browser_notice("Browser origin not changed",
+                                        str(exc)[:220], 403)
+
+    @staticmethod
+    def _browser_probe(origin: str, host: str, bearer: str) -> dict:
+        """Local-only real HTTP CORS/Host/MCP check, never echo the Bearer secret."""
+        base = "http://127.0.0.1:8000/mcp"
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        shared = {"Host": host, "Origin": origin}
+        def fetch(request):
+            try:
+                with opener.open(request, timeout=8) as response:
+                    return response.status, response.headers, response.read(8192)
+            except urllib.error.HTTPError as exc:
+                return exc.code, exc.headers, exc.read(8192)
+        try:
+            preflight = urllib.request.Request(base, method="OPTIONS", headers={
+                **shared, "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers":
+                    "authorization,content-type,mcp-protocol-version",
+            })
+            cors_status, cors_headers, _ = fetch(preflight)
+            allowed = cors_status == 204 and cors_headers.get(
+                "Access-Control-Allow-Origin") == origin
+            result = {"cors": "allowed" if allowed else "denied",
+                      "preflight_http": cors_status, "host": "not tested",
+                      "mcp": "not tested"}
+            if not allowed:
+                return result
+            if not bearer:
+                result["mcp"] = ("No credential supplied: MCP authentication and "
+                                 "SDK Host validation were not tested.")
+                return result
+            if len(bearer) > 512 or "\r" in bearer or "\n" in bearer:
+                raise ValueError("Bearer token must be nonempty, bounded and free of newlines")
+            headers = {**shared, "Authorization": "Bearer " + bearer,
+                       "Content-Type": "application/json",
+                       "Accept": "application/json, text/event-stream",
+                       "MCP-Protocol-Version": "2025-06-18"}
+            def rpc(method, params):
+                payload = json.dumps({"jsonrpc": "2.0", "id": 1,
+                                      "method": method, "params": params}).encode()
+                return fetch(urllib.request.Request(base, method="POST",
+                                                    data=payload, headers=headers))
+            status, _, body = rpc("initialize", {
+                "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": {"name": "kali-mcp-cors-check", "version": "1.0"}})
+            result["initialize_http"] = status
+            if status == 421:
+                result["host"] = "rejected by MCP SDK (421)"
+                result["mcp"] = "not initialized"
+                return result
+            if status == 401:
+                result["host"] = "not reached (invalid or revoked credential)"
+                result["mcp"] = "authentication rejected (401)"
+                return result
+            if status != 200:
+                result["host"] = "MCP error (HTTP " + str(status) + ")"
+                return result
+            try:
+                info = json.loads(body)
+                if "serverInfo" not in info.get("result", {}):
+                    raise ValueError("Missing MCP serverInfo")
+            except (ValueError, TypeError):
+                result["host"] = "passed"
+                result["mcp"] = "invalid initialize response"
+                return result
+            result["host"] = "passed (no-port public Host)"
+            list_status, _, list_body = rpc("tools/list", {})
+            result["tools_list_http"] = list_status
+            if list_status == 200:
+                try:
+                    tools = json.loads(list_body).get("result", {}).get("tools", [])
+                    result["mcp"] = "initialize and tools/list succeeded (" + str(len(tools)) + " tools)"
+                except (ValueError, TypeError):
+                    result["mcp"] = "tools/list returned malformed JSON"
+            else:
+                result["mcp"] = "tools/list rejected (HTTP " + str(list_status) + ")"
+            return result
+        except (OSError, ValueError) as exc:
+            return {"cors": "probe failed", "host": "unknown", "mcp": "not tested",
+                    "error": type(exc).__name__}
+
+    async def browser_origins_check(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        form = await request.form()
+        if (error := self._csrf(request, str(form.get("csrf") or ""))):
+            return error
+        try:
+            origin = validate_browser_origin(str(form.get("origin") or ""))
+            bearer = str(form.get("bearer") or "")
+            public_host = urlparse(self.cfg.base_url).hostname
+            if not public_host:
+                raise ValueError("Public host is not configured")
+            if ":" in public_host:
+                public_host = "[" + public_host + "]"
+            result = await asyncio.to_thread(self._browser_probe, origin,
+                                             public_host, bearer)
+            details = " | ".join(str(k) + ": " + str(v) for k, v in result.items())
+            return self._browser_notice("MCP browser CORS diagnostic", details)
+        except ValueError as exc:
+            return self._browser_notice("Invalid browser origin", str(exc), 400)
 
     async def dashboard(self, request: Request):
         if not request.state.admin:
@@ -343,18 +504,52 @@ class UI:
                if t["last_used"] else "Never")
             + "</td><td>" + html.escape(", ".join(json.loads(t["allowed_tools"])) or "All")
             + "</td><td>"
-            + (('<form method="post" action="/api/v1/api-tokens/revoke">'
+            + (('<form class="token-action" method="post" action="/api/v1/api-tokens/revoke">'
                 '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">'
                 '<input type="hidden" name="token_id" value="' + html.escape(t["token_id"]) + '">'
                 '<input type="password" name="password" placeholder="Superuser password" required>'
                 '<button type="submit">Revoke</button></form>'
-                '<form method="post" action="/api/v1/api-tokens/rotate">'
+                '<form class="token-action" method="post" action="/api/v1/api-tokens/rotate">'
                 '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">'
                 '<input type="hidden" name="token_id" value="' + html.escape(t["token_id"]) + '">'
                 '<input type="number" name="days" min="1" max="90" value="30" required>'
                 '<input type="password" name="password" placeholder="Superuser password" required>'
                 '<button type="submit">Rotate</button></form>') if not t["revoked"] else "")
             + "</td></tr>" for t in self.store.list_api_tokens(100))
+        active_origins = self.cfg.browser_origins
+        host_origins = list(active_origins)
+        deploy_state = "unknown"
+        deploy_detail = ""
+        if os.getenv("KALI_MCP_HOST_AGENT", "false").lower() == "true":
+            try:
+                from .broker_client import call
+                observed = await asyncio.to_thread(
+                    call, self.cfg.broker_socket, "browser_origins_status", timeout=3)
+                host_origins = observed.get("configured", host_origins)
+                deploy = observed.get("deployment", {})
+                deploy_state = str(deploy.get("state") or "unknown")
+                deploy_detail = str(deploy.get("detail") or "")[:180]
+            except Exception:
+                deploy_state = "Host Agent status unavailable"
+        origin_items = "".join(
+            '<li class="cors-origin-item"><code>' + html.escape(origin) +
+            '</code><form method="post" action="/api/v1/browser-origins" class="origin-remove">' +
+            '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">' +
+            '<input type="hidden" name="action" value="remove">' +
+            '<input type="hidden" name="origin" value="' + html.escape(origin, quote=True) + '">' +
+            '<input type="password" name="password" required placeholder="Superuser password" autocomplete="current-password" aria-label="Superuser password to remove origin">' +
+            '<button type="submit">Remove</button></form></li>'
+            for origin in host_origins
+        ) or "<li>No additional browser origins authorized.</li>"
+        active_label = ", ".join(active_origins) or "none (fail closed)"
+        configured_label = ", ".join(host_origins) or "none"
+        cors_notice = ""
+        if request.query_params.get("cors") == "scheduled":
+            cors_notice = ("Configuration scheduled; Core may restart. Refresh this page "
+                           "to see the active allowlist and deployment state.")
+        elif request.query_params.get("cors") == "unchanged":
+            cors_notice = "Origin list was already in the requested state."
+
         latest = (self.updates.status() if self.updates is not None else {}).get("latest")
         installed = installed_release_tag()
         comparison = is_update_available(installed, latest)
@@ -392,21 +587,60 @@ class UI:
         <p class="muted">Revocation invalidates all active bearer and refresh tokens for that client.</p>
         <table><thead><tr><th>Client</th><th>ID</th><th>State</th><th>Action</th></tr></thead>
         <tbody>{client_rows}</tbody></table></section>
-        <section><h2>MCP Clients &mdash; API Tokens</h2>
-         <p>API keys work on the same /mcp endpoint as OAuth Code + PKCE. Keys expire,
-         appear once, and never enable disabled host/root capabilities.</p>
-         <form action="/api/v1/api-tokens/create" method="post">
+        <section class="api-panel"><h2>MCP Browser Origins / CORS</h2>
+         <p class="muted">Only these exact HTTPS browser origins can connect directly to /mcp.
+         Origin authorization is NOT an API credential. Admin endpoints remain same-origin.</p>
+         <p><strong>Active in Core:</strong> <code>{html.escape(active_label)}</code></p>
+         <p><strong>Saved on Host:</strong> <code>{html.escape(configured_label)}</code></p>
+         <p class="muted" role="status">Deployment: {html.escape(deploy_state)}
+            {html.escape(deploy_detail)} {html.escape(cors_notice)}</p>
+         <ul class="cors-origins">{origin_items}</ul>
+         <form method="post" action="/api/v1/browser-origins" class="cors-form">
+           <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
+           <input type="hidden" name="action" value="add">
+           <label>Browser origin (exact HTTPS URL, no path)
+             <input type="url" name="origin" required maxlength="255"
+                    placeholder="https://llm.example.com"></label>
+           <label>Confirm superuser password
+             <input type="password" name="password" required autocomplete="current-password"></label>
+           <button type="submit">Authorize browser origin</button>
+         </form>
+         <h3>Check CORS / MCP connection</h3>
+         <p class="muted">Tests a real OPTIONS preflight. For SDK Host and MCP
+         initialize/tools/list tests, optionally paste a valid Bearer token.
+         This token is not logged, stored or shown in the result.</p>
+         <form method="post" action="/api/v1/browser-origins/check" class="cors-form">
+           <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
+           <label>Browser origin to test
+             <input type="url" name="origin" required maxlength="255"
+                    placeholder="https://llm.example.com"></label>
+           <label>Optional API Bearer token (not saved)
+             <input type="password" name="bearer" maxlength="512" autocomplete="off"></label>
+           <button type="submit">Check CORS</button>
+         </form>
+        </section>
+        <section class="api-panel"><h2>MCP Clients &mdash; API Tokens</h2>
+         <p>API tokens and OAuth Code + PKCE use the same /mcp endpoint. Tokens expire,
+         are shown once, and do not enable host/root. For browser clients, authorize
+         the origin in the section above before creating a token.</p>
+         <form action="/api/v1/api-tokens/create" method="post" class="api-token-form">
            <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
            <label>Client name<input name="name" maxlength="80" required placeholder="llama.cpp WebUI"></label>
            <label>Expires in days (1-90)<input type="number" min="1" max="90" name="days" value="30" required></label>
-           <label>Tool allowlist (comma-separated; blank permits all)
+           <label>Tool allowlist (blank permits all)
              <input name="allowed_tools" placeholder="system_status,tools_search"></label>
-           <label>Confirm superuser password<input type="password" name="password" required autocomplete="current-password"></label>
+           <label>Browser origin (optional; must already be authorized)
+             <input type="url" name="browser_origin" maxlength="255"
+                    placeholder="https://llm.example.com"></label>
+           <label>Confirm superuser password
+             <input type="password" name="password" required autocomplete="current-password"></label>
            <button type="submit">Create API Token (show once)</button>
          </form>
-         <table><thead><tr><th>Client</th><th>ID</th><th>Status</th><th>Expires</th>
+         <div class="table-scroll" role="region" aria-label="API tokens" tabindex="0">
+           <table><thead><tr><th>Client</th><th>ID</th><th>Status</th><th>Expires</th>
            <th>Last used</th><th>Tools</th><th>Action</th></tr></thead><tbody>{api_rows}</tbody></table>
-         </section>
+         </div>
+        </section>
          <section><h2>Audit</h2><pre id="audit">Loading ...</pre></section>
         </main><script src="/static/app.js?v={html.escape(installed or 'unknown', quote=True)}" defer></script></body></html>"""
         return HTMLResponse(body, headers={"Cache-Control": "no-store",

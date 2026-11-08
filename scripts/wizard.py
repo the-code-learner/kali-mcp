@@ -16,6 +16,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from kali_mcp.superuser import make_record, read_record, save_record, verify, valid_username, validate_password
+from kali_mcp.browser_origins import parse_browser_origins
 from urllib.parse import urlparse
 
 ENV = re.compile(r"^([A-Z][A-Z0-9_]*)=([^\r\n]*)$")
@@ -243,10 +244,7 @@ def configure(path: Path, gid: int, *, interactive: bool, host_user: str = "kali
                        if interactive and yesno("Configure additional browser origins", bool(old_origins))
                        else os.getenv("KALI_MCP_BROWSER_ORIGINS", old_origins)
                        if not interactive else old_origins)
-    origins = [o.strip() for o in browser_origins.split(",") if o.strip()]
-    if len(origins) > 12 or len(set(origins)) != len(origins) or any(
-            not valid_origin(o) for o in origins):
-        raise ValueError("MCP browser origins must be exact HTTPS/localhost origins")
+    origins = parse_browser_origins(browser_origins)
     # Invalidate any old success marker before replacing credentials/config.
     # A crash during reconfiguration must never look like a completed setup.
     (path / "config.ready").unlink(missing_ok=True)
