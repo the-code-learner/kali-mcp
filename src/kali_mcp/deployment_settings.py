@@ -189,7 +189,7 @@ def validate_change(current: dict[str, str], changes: dict[str, str]) -> dict[st
 
 def public_inventory(stack: dict[str, str], agent: dict[str, str]) -> list[dict]:
     """All known keys are shown, but never reveal secret values or arbitrary paths."""
-    keys = sorted(set(stack) | set(agent) | set(FIELD_MAP))
+    keys = sorted(set(stack) | set(agent) | set(FIELD_MAP) | set(READONLY_REASONS))
     result = []
     for key in keys:
         if not _KEY_PATTERN.fullmatch(key):
@@ -197,7 +197,7 @@ def public_inventory(stack: dict[str, str], agent: dict[str, str]) -> list[dict]
         field = FIELD_MAP.get(key)
         secret = _SECRET_PATTERN.search(key) is not None
         stored = stack.get(key, agent.get(key))
-        value = (stored if stored is not None else field.default if field else "")
+        value = (stored if stored is not None else field.default if field else "(installer managed)")
         result.append({
             "name": key, "value": "(hidden)" if secret else value,
             "editable": field is not None and not secret,
