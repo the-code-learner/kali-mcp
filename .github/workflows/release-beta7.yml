@@ -60,8 +60,12 @@ jobs:
           set -euo pipefail
           before_user="$(sudo sha256sum /etc/kali-mcp/superuser.json | cut -d' ' -f1)"
           before_stack="$(sudo sha256sum /etc/kali-mcp/stack.env | cut -d' ' -f1)"
+          # Reproduce beta.4-originated installs with valid credentials but
+          # no config.ready. An upgrade from a non-TTY systemd unit must
+          # migrate the marker, not re-open the interactive wizard.
+          sudo rm -f /etc/kali-mcp/config.ready
           sudo env KALI_MCP_VERSION="$GITHUB_SHA" \
-            bash scripts/install-hybrid.sh --upgrade --non-interactive
+            bash scripts/install-hybrid.sh --upgrade
           test "$before_user" = "$(sudo sha256sum /etc/kali-mcp/superuser.json | cut -d' ' -f1)"
           test "$before_stack" = "$(sudo sha256sum /etc/kali-mcp/stack.env | cut -d' ' -f1)"
           sudo test -f /etc/kali-mcp/config.ready
