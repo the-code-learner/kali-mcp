@@ -25,6 +25,7 @@ from uuid import uuid4
 from .releases import query_releases, select_release
 from .browser_origins import parse_browser_origins, validate_browser_origin
 from .cli_config import parse_env
+from .deployment_settings import public_inventory, validate_change, FIELD_MAP
 import threading
 
 from .broker import Broker, BrokerDenied, Handler, LocalServer
@@ -156,6 +157,57 @@ class NativeAgent(Broker):
                             self._close_session(session_id, session)
             self.store.audit("admin", "settings_set", "allow", key)
             return {"ok": True, "settings": self.store.settings()}
+        if op == "deployment_settings_get":
+            stack = parse_env(Path("/etc/kali-mcp/stack.env"))
+            agent = parse_env(Path("/etc/kali-mcp/agent.env"))
+            status_path = Path("/var/lib/kali-mcp/deployment-settings-status.json")
+            progress = {"state": "not changed"}
+            try:
+                if status_path.is_file() and not status_path.is_symlink():
+                    progress = json.loads(status_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                progress = {"state": "status unavailable"}
+            return {"ok": True, "fields": public_inventory(stack, agent),
+                    "deployment": progress}
+        if op == "deployment_settings_update":
+            self._verify_superuser(data.get("superuser_name"),
+                                   data.get("superuser_password"))
+            requested = data.get("changes")
+            if not isinstance(requested, dict) or not requested or len(requested) > 3:
+                raise BrokerDenied("Invalid deployment change")
+            try:
+                current = parse_env(Path("/etc/kali-mcp/stack.env"))
+                changes = validate_change(current, requested)
+            except (ValueError, OSError) as exc:
+                raise BrokerDenied("Invalid deployment change: " + str(exc)[:200]) from exc
+            new = {**current, **changes}
+            # High-impact changes have additional, explicit user intent.
+            if new.get("KALI_MCP_ALLOW_ALL_TARGETS", "false") == "true" and (
+                "KALI_MCP_ALLOW_ALL_TARGETS" in changes or
+                "KALI_MCP_DENIED_CIDRS" in changes
+            ) and data.get("confirm") != "ALLOW ALL":
+                raise BrokerDenied("Type ALLOW ALL to confirm this broad target scope")
+            if any(key in changes and changes[key] == "true"
+                   for key in ("KALI_MCP_ALLOW_HOST_ROOT",
+                               "KALI_MCP_ALLOW_MCP_ROOT")) and (
+                               data.get("confirm") != "ENABLE ROOT"):
+                raise BrokerDenied("Type ENABLE ROOT to confirm this root ceiling")
+            if all(current.get(k, FIELD_MAP[k].default) == value
+                   for k, value in changes.items()):
+                return {"ok": True, "unchanged": True}
+            unit = "kali-mcp-deploy-" + uuid4().hex[:12]
+            command = ["systemd-run", "--collect", "--on-active=3s",
+                       "--unit=" + unit, "/usr/bin/python3",
+                       "/opt/kali-mcp/current/scripts/manage_deployment_settings.py",
+                       "--changes", json.dumps(changes, separators=(",", ":"))]
+            result = self._run(command, timeout=20)
+            if result.get("exit_code") != 0:
+                raise BrokerDenied("systemd could not schedule the deployment change")
+            self.store.audit("admin", "deployment_settings.update", "allow",
+                             ",".join(sorted(changes)))
+            return {"ok": True, "scheduled": True, "unit": unit,
+                    "keys": sorted(changes),
+                    "message": "Scheduled, not yet applied; check deployment state"}
         if op == "browser_origins_status":
             configured = parse_browser_origins(
                 parse_env(Path("/etc/kali-mcp/stack.env")).get("KALI_MCP_BROWSER_ORIGINS", ""))
