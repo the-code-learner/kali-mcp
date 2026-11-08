@@ -24,11 +24,15 @@ EXPECTED = "https://llm.example.test," + NEW
 
 
 def main() -> None:
-    if os.getenv("KALI_MCP_SMOKE_BROWSER_ORIGINS") != "true":
-        raise SystemExit("This script requires the explicit ephemeral CI smoke flag")
+    if "--ephemeral-ci" not in sys.argv:
+        raise SystemExit("This script is only for explicitly selected ephemeral CI smoke runs")
     if os.geteuid() != 0:
         raise SystemExit("Run as root in the isolated CI test appliance")
-    password = os.environ["KALI_MCP_TEST_ADMIN_PASSWORD"]
+    password_file = Path("/run/kali-mcp-cli-test-password")
+    if (not password_file.is_file() or password_file.is_symlink() or
+            password_file.stat().st_mode & 0o077):
+        raise SystemExit("CI-only private superuser test-credential file is absent")
+    password = password_file.read_text(encoding="utf-8").strip()
     result = call("/run/kali-mcp-agent/agent.sock", "browser_origins_update", {
         "action": "add", "origin": NEW, "superuser_name": "admin",
         "superuser_password": password,
