@@ -30,6 +30,7 @@ MIN_FREE_BYTES = 128 * 1024 * 1024
 FILE_LIFETIME = 24 * 3600
 LINK_LIFETIME = 10 * 60
 MAX_BASE64_SESSION_AGE = 2 * 3600
+OPENLINK_STREAM_AGE = 60 * 60  # allow slow streamed upload after link use
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{40,96}$")
 MIME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.+_-]*/[a-zA-Z0-9][a-zA-Z0-9.+_-]*$")
 
@@ -286,8 +287,11 @@ class TransferVault:
             if not changed:
                 return None
             if verb == "PUT":
-                self.store.db.execute("UPDATE transfer_files SET status='receiving' WHERE file_id=?",
-                                      (row["file_id"],))
+                # The signed URL must be used within 10 minutes, but a large
+                # upload may continue for up to an hour after it starts.
+                self.store.db.execute(
+                    "UPDATE transfer_files SET status='receiving',expires=? WHERE file_id=?",
+                    (int(time.time()) + OPENLINK_STREAM_AGE, row["file_id"]))
             return dict(row)
 
     def consume_download(self, secret: str) -> tuple[Path, str] | None:
