@@ -122,3 +122,63 @@ def test_browser_origins_must_be_exact_and_secure(monkeypatch):
             pass
         else:
             raise AssertionError("Accepted insecure browser origin: " + value)
+
+
+
+def test_webui_token_creation_one_time_and_csrf(tmp_path, monkeypatch):
+    import re
+
+    from starlette.requests import Request
+    from kali_mcp.webui import UI
+
+    monkeypatch.setenv("KALI_MCP_PUBLIC_URL", "https://kali.example.test")
+    monkeypatch.setenv("KALI_MCP_ADMIN_PASSWORD", "TEST_ADMIN_PASSWORD_ABOVE_SIXTEEN")
+    cfg = Config.from_env()
+    store = Store(tmp_path / "webui.db")
+    admin = Admin(cfg, store)
+    ui = UI(cfg, store, None, None, None)
+
+    class AuthGate:
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                admin.authenticate_request(Request(scope, receive))
+            await self.app(scope, receive, send)
+
+    app = AuthGate(Starlette(routes=[
+        Route("/login", admin.login_post, methods=["POST"]),
+        Route("/", ui.dashboard, methods=["GET"]),
+        Route("/api/v1/api-tokens/create", ui.create_api_token, methods=["POST"]),
+        Route("/api/v1/api-tokens/revoke", ui.revoke_api_token, methods=["POST"]),
+    ]))
+    with TestClient(app, base_url=cfg.base_url, follow_redirects=False) as client:
+        login = client.post("/login", data={
+            "username": "admin", "password": "TEST_ADMIN_PASSWORD_ABOVE_SIXTEEN"})
+        assert login.status_code == 303
+        page = client.get("/")
+        assert page.status_code == 200
+        assert "MCP Clients" in page.text
+        csrf = re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+        data = {"name": "llama.cpp", "days": "30", "allowed_tools": "system_status",
+                "csrf": csrf, "password": "TEST_ADMIN_PASSWORD_ABOVE_SIXTEEN"}
+        assert client.post("/api/v1/api-tokens/create", data={
+            **data, "csrf": "wrong"}).status_code == 403
+        assert client.post("/api/v1/api-tokens/create", data={
+            **data, "password": "wrong"}).status_code == 403
+        created = client.post("/api/v1/api-tokens/create", data=data)
+        assert created.status_code == 200
+        secret = re.search(r"kmp_[0-9a-f]{32}\.[A-Za-z0-9_-]{64}", created.text)
+        assert secret
+        token = secret.group()
+        assert "no-store" in created.headers["cache-control"]
+        dashboard = client.get("/")
+        assert token not in dashboard.text
+        entry = store.list_api_tokens()[0]
+        assert entry["name"] == "llama.cpp"
+        assert client.post("/api/v1/api-tokens/revoke", data={
+            "csrf": csrf, "password": data["password"],
+            "token_id": entry["token_id"]}).status_code == 303
+        assert store.verify_api_token(token, cfg.resource, admin._credential()[1]) is None
+    store.close()
