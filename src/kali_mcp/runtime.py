@@ -116,7 +116,8 @@ class SecurityGate:
                     ):
                         if key not in existing:
                             headers.append((key, value))
-                    headers.append((b"cache-control", b"no-store"))
+                    if b"cache-control" not in existing:
+                        headers.append((b"cache-control", b"no-store"))
                 if cfg.base_url.startswith("https://"):
                     headers.append((b"strict-transport-security", b"max-age=31536000"))
                 if scope.get("path", "").startswith(("/api/", "/jobs/", "/login", "/logout", "/authorize", "/token", "/register")):
