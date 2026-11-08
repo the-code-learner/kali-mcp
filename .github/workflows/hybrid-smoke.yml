@@ -104,6 +104,7 @@ jobs:
         env:
           KALI_MCP_TEST_ADMIN_PASSWORD: CI_HYBRID_PASSWORD_TEST_ONLY_2026
           KALI_MCP_SMOKE_BROWSER_ORIGIN: https://llm.example.test
+          KALI_MCP_SMOKE_TEST_API_TOKENS: "true"
         run: python3 scripts/smoke_http.py
       - name: Verify idempotent upgrade preserves settings and recreates Core
         run: |
