@@ -67,3 +67,7 @@ read-only workflows. Bearer or custom-header tokens never grant root/host
 capabilities: existing deployment ceilings and Host Agent toggles still govern
 them. Revocation takes effect immediately; password rotation invalidates API
 tokens bound to the previous superuser fingerprint.
+
+Rotate API keys with the **Rotate** action in the WebUI, or use the
+superuser-authenticated CLI `sudo /usr/local/bin/kali-mcp api-token-rotate <token_id>`.
+The old key is invalidated immediately and only the replacement secret is shown.
