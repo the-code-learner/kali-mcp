@@ -83,11 +83,11 @@ async def snapshot(ui, request):
     # returns. Distinguish the reachability of Agent from its settings inventory.
     agent_online = any(isinstance(item, dict) and item.get("ok") for item in
                        (agent, inventory, cors, upgrade))
+    fields = inventory.get("fields", []) if inventory.get("ok") else []
     inventory_available = bool(inventory.get("ok")) and all(
         any(field.get("name") == key for field in fields)
         for key in ("KALI_MCP_ALLOWED_CIDRS", "KALI_MCP_DENIED_CIDRS",
                     "KALI_MCP_ALLOW_ALL_TARGETS"))
-    fields = inventory.get("fields", []) if inventory.get("ok") else []
     # The deployment inventory comes exclusively from the root Native Agent.
     # If it is unavailable show the full setting schema with *unavailable*
     # values (never invented defaults) and disable all changes. A Core that
