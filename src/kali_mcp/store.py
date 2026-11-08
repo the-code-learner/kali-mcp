@@ -4,6 +4,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
+import hmac
+import re
+import secrets
+import time
 import json
 from pathlib import Path
 import sqlite3
@@ -57,6 +61,12 @@ class Store:
         CREATE INDEX IF NOT EXISTS oauth_tokens_family ON oauth_tokens(family);
         CREATE TABLE IF NOT EXISTS admin_sessions (
           hash TEXT PRIMARY KEY, csrf_hash TEXT NOT NULL, expires INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS api_tokens (
+          token_id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL,
+          resource TEXT NOT NULL, scope TEXT NOT NULL, allowed_tools TEXT NOT NULL,
+          issued_for TEXT NOT NULL, created_at INTEGER NOT NULL, expires INTEGER NOT NULL,
+          last_used INTEGER, revoked INTEGER NOT NULL DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS api_tokens_expires ON api_tokens(expires);
         """)
         for key in ("host_root", "host_exec", "package_install", "network_changes", "mcp_updates"):
             self.db.execute("INSERT OR IGNORE INTO settings VALUES (?, 'false')", (key,))
@@ -199,6 +209,74 @@ class Store:
             self.db.execute("DELETE FROM oauth_codes WHERE client_id=?", (client_id,))
             self._audit(actor, "client.revoke", "allow", client_id)
         return True
+
+    def create_api_token(self, name: str, resource: str, issued_for: str, *,
+                         days: int = 30, allowed_tools: list[str] | None = None,
+                         actor: str = "webui") -> tuple[str, str]:
+        """Issue a 384-bit API key once. The database stores only SHA-256."""
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80 or any(
+                ord(c) < 32 or ord(c) == 127 for c in name):
+            raise ValueError("Token name must contain 1-80 printable characters")
+        if not isinstance(days, int) or not 1 <= days <= 90:
+            raise ValueError("API token lifetime must be 1-90 days")
+        if not isinstance(resource, str) or not resource.endswith("/mcp"):
+            raise ValueError("Invalid MCP resource")
+        if not isinstance(issued_for, str) or len(issued_for) != 64:
+            raise ValueError("Administrator credential fingerprint required")
+        tools = allowed_tools or []
+        if (not isinstance(tools, list) or len(tools) > 50 or
+                any(not isinstance(tool, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", tool) for tool in tools)):
+            raise ValueError("Invalid tool allowlist")
+        token_id = uuid4().hex
+        token = "kmp_" + token_id + "." + secrets.token_urlsafe(48)
+        now = int(time.time())
+        with self.transaction():
+            if self.db.execute("SELECT count(*) FROM api_tokens WHERE revoked=0").fetchone()[0] >= 200:
+                raise ValueError("API token limit reached (revoke unused keys)")
+            self.db.execute("""
+                INSERT INTO api_tokens(token_id,name,token_hash,resource,scope,allowed_tools,
+                                       issued_for,created_at,expires)
+                VALUES (?,?,?,?,?,?,?,?,?)""",
+                (token_id, name.strip(), digest(token), resource, "mcp:tools",
+                 json.dumps(sorted(set(tools))), issued_for, now, now + days * 86400))
+            self._audit(actor, "api_token.create", "allow", token_id)
+        return token_id, token
+
+    def verify_api_token(self, token: str, resource: str, issued_for: str) -> dict | None:
+        """Return identity/limits for a valid key, with a constant-time digest comparison."""
+        match = re.fullmatch(r"kmp_([0-9a-f]{32})\\.([A-Za-z0-9_-]{64})", token or "")
+        if not match:
+            return None
+        now = int(time.time())
+        with self.lock:
+            row = self.db.execute("SELECT * FROM api_tokens WHERE token_id=?",
+                                  (match.group(1),)).fetchone()
+            if (row is None or not hmac.compare_digest(row["token_hash"], digest(token))
+                    or row["revoked"] or row["expires"] <= now
+                    or row["resource"] != resource or row["scope"] != "mcp:tools"
+                    or not hmac.compare_digest(row["issued_for"], issued_for)):
+                return None
+            self.db.execute("UPDATE api_tokens SET last_used=? WHERE token_id=?", (now, row["token_id"]))
+            return {"token_id": row["token_id"], "allowed_tools": json.loads(row["allowed_tools"])}
+
+    def list_api_tokens(self, limit: int = 100) -> list[dict]:
+        """Admin inventory never exposes hashes or recoverable secrets."""
+        with self.lock:
+            return [dict(row) for row in self.db.execute("""
+                SELECT token_id,name,resource,scope,allowed_tools,created_at,expires,
+                       last_used,revoked FROM api_tokens ORDER BY created_at DESC LIMIT ?""",
+                (max(1, min(limit, 200)),))]
+
+    def revoke_api_token(self, token_id: str, *, actor: str = "webui") -> bool:
+        if not re.fullmatch(r"[0-9a-f]{32}", token_id or ""):
+            raise ValueError("Invalid API token ID")
+        with self.transaction():
+            changed = self.db.execute(
+                "UPDATE api_tokens SET revoked=1 WHERE token_id=? AND revoked=0",
+                (token_id,)).rowcount
+            if changed:
+                self._audit(actor, "api_token.revoke", "allow", token_id)
+            return bool(changed)
 
     def close(self) -> None:
         with self.lock:
