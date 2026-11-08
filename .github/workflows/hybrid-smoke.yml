@@ -61,6 +61,14 @@ jobs:
           assert not any("KALI_MCP_ADMIN_PASSWORD=" in value for value in values)
           assert any("KALI_MCP_SUPERUSER_FILE=" in value for value in values)
           '
+          sudo test -f /etc/kali-mcp/config.ready
+          sudo test -f /etc/kali-mcp/stack.env
+          sudo test -f /etc/kali-mcp/agent.env
+          # Confirm a restrictive umask did not make the codeload release unreadable
+          # to the Docker Core uid or the host runner user.
+          sudo setpriv --reuid 10001 --regid 10001 --clear-groups \
+            test -r /opt/kali-mcp/current/src/kali_mcp/runtime.py
+          sudo test -f /var/log/kali-mcp/install.log
           sudo test -f /etc/kali-mcp/superuser.json
           sudo test "$(sudo stat -c '%a' /etc/kali-mcp/superuser.json)" = 600
           docker exec -i kali-mcp-core /opt/venv/bin/python - <<'PY'
