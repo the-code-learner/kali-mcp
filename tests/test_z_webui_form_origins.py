@@ -78,7 +78,16 @@ def test_origin_null_requires_referer_fetch_metadata_and_csrf(tmp_path, monkeypa
         blocked_csrf = client.post("/api/v1/updates/check",
                                    data={"csrf": "invalid"}, headers=good_headers)
         assert blocked_csrf.status_code == 403
-        assert blocked_csrf.json()["error"] == "Invalid CSRF token"
+        assert "Change not applied" in blocked_csrf.text
+        assert "No change was saved" in blocked_csrf.text
+
+        # Clients explicitly requesting JSON retain the original CSRF API
+        # contract, rather than receiving an HTML navigation response.
+        api_csrf = client.post("/api/v1/updates/check",
+            data={"csrf": "invalid"},
+            headers={**good_headers, "Accept": "application/json"})
+        assert api_csrf.status_code == 403
+        assert api_csrf.json() == {"error": "Invalid CSRF token"}
 
         cross_site = dict(good_headers, Origin="https://evil.example")
         assert client.post("/api/v1/updates/check", data={"csrf": "expected-csrf"},
