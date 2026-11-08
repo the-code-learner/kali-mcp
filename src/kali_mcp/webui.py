@@ -504,7 +504,7 @@ class UI:
                if t["last_used"] else "Never")
             + "</td><td>" + html.escape(", ".join(json.loads(t["allowed_tools"])) or "All")
             + "</td><td>"
-            + (('<form class="token-action" method="post" action="/api/v1/api-tokens/revoke">
+            + (('<form class="token-action" method="post" action="/api/v1/api-tokens/revoke">'
                 '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">'
                 '<input type="hidden" name="token_id" value="' + html.escape(t["token_id"]) + '">'
                 '<input type="password" name="password" placeholder="Superuser password" required>'
