@@ -197,6 +197,20 @@ class UI:
             return record_fingerprint(read_record(Path(path)))
         return hashlib.sha256(self.cfg.admin_password.encode()).hexdigest()
 
+    def _show_one_time_token(self, token_id: str, token: str) -> HTMLResponse:
+        body = ("""<!doctype html><html><head><meta charset="utf-8">
+          <title>Kali MCP - one-time token</title></head><body>
+          <h1>API token created</h1><p>Copy this secret now; it cannot be retrieved later.</p>
+          <textarea readonly rows="4" cols="90">"""
+          + html.escape(token) + """</textarea><p>Credential ID: <code>"""
+          + html.escape(token_id) + """</code></p>
+          <p>Store in a password manager; browser-side llama.cpp may retain it in its profile.</p>
+          <a href="/">Return to dashboard</a></body></html>""")
+        return HTMLResponse(body, headers={"Cache-Control": "no-store", "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'"})
+
+
     async def create_api_token(self, request: Request):
         if (error := self._admin(request)):
             return error
@@ -213,17 +227,24 @@ class UI:
                 allowed_tools=names, actor="webui:" + request.state.admin_username)
         except (ValueError, OSError) as exc:
             return JSONResponse({"error": str(exc)[:160]}, status_code=400)
-        body = ("""<!doctype html><html><head><meta charset="utf-8">
-          <title>Kali MCP - one-time token</title></head><body>
-          <h1>API token created</h1><p>Copy this secret now; it cannot be retrieved later.</p>
-          <textarea readonly rows="4" cols="90">"""
-          + html.escape(token) + """</textarea><p>Credential ID: <code>"""
-          + html.escape(token_id) + """</code></p>
-          <p>Store in a password manager; browser-side llama.cpp may retain it in its profile.</p>
-          <a href="/">Return to dashboard</a></body></html>""")
-        return HTMLResponse(body, headers={"Cache-Control": "no-store", "Pragma": "no-cache",
-            "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'"})
+        return self._show_one_time_token(token_id, token)
+
+    async def rotate_api_token(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        form = await request.form()
+        if (error := self._csrf(request, str(form.get("csrf") or ""))):
+            return error
+        if not await self._confirm_token_action(request, str(form.get("password") or "")):
+            return JSONResponse({"error": "Superuser confirmation required"}, status_code=403)
+        try:
+            token_id, token = self.store.rotate_api_token(
+                str(form.get("token_id") or ""), self.cfg.resource,
+                self._token_fingerprint(), days=int(form.get("days") or 30),
+                actor="webui:" + request.state.admin_username)
+        except (ValueError, OSError) as exc:
+            return JSONResponse({"error": str(exc)[:160]}, status_code=400)
+        return self._show_one_time_token(token_id, token)
 
     async def revoke_api_token(self, request: Request):
         if (error := self._admin(request)):
@@ -295,7 +316,13 @@ class UI:
                 '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">'
                 '<input type="hidden" name="token_id" value="' + html.escape(t["token_id"]) + '">'
                 '<input type="password" name="password" placeholder="Superuser password" required>'
-                '<button type="submit">Revoke</button></form>') if not t["revoked"] else "")
+                '<button type="submit">Revoke</button></form>'
+                '<form method="post" action="/api/v1/api-tokens/rotate">'
+                '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">'
+                '<input type="hidden" name="token_id" value="' + html.escape(t["token_id"]) + '">'
+                '<input type="number" name="days" min="1" max="90" value="30" required>'
+                '<input type="password" name="password" placeholder="Superuser password" required>'
+                '<button type="submit">Rotate</button></form>') if not t["revoked"] else "")
             + "</td></tr>" for t in self.store.list_api_tokens(100))
         body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
         <title>Kali MCP — Dashboard</title><link rel="stylesheet" href="/static/app.css"></head><body>
