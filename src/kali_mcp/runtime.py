@@ -153,7 +153,8 @@ class SecurityGate:
         if method == "POST" and path in {"/login", "/authorize", "/logout",
                                         "/api/v1/settings", "/api/v1/clients/revoke", "/api/v1/updates/check",
                                         "/api/v1/updates/install", "/api/v1/api-tokens/create",
-                                        "/api/v1/api-tokens/revoke", "/api/v1/api-tokens/rotate"}:
+                                        "/api/v1/api-tokens/revoke", "/api/v1/api-tokens/rotate",
+                                        "/api/v1/browser-origins", "/api/v1/browser-origins/check"}:
             admin_origins = {cfg.base_url, "http://localhost:8787", "http://127.0.0.1:8787"}
             referrer = headers.get("referer", "")
             referer_ok = any(referrer.startswith(base + "/") for base in admin_origins)
@@ -368,6 +369,8 @@ app = SecurityGate(Starlette(
         Route("/api/v1/api-tokens/create", ui.create_api_token, methods=["POST"]),
         Route("/api/v1/api-tokens/revoke", ui.revoke_api_token, methods=["POST"]),
         Route("/api/v1/api-tokens/rotate", ui.rotate_api_token, methods=["POST"]),
+        Route("/api/v1/browser-origins", ui.browser_origins_update, methods=["POST"]),
+        Route("/api/v1/browser-origins/check", ui.browser_origins_check, methods=["POST"]),
         Route("/api/v1/updates/check", ui.update_check, methods=["POST"]),
         Route("/api/v1/updates/install", ui.update_install, methods=["POST"]),
         Route("/jobs/{job_id}", ui.job_report, methods=["GET"]),
