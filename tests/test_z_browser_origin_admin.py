@@ -102,11 +102,10 @@ def test_root_worker_preserves_env_and_rolls_back_on_failure(tmp_path, monkeypat
 
     # Docker fails its healthcheck on the first attempt. Both protected files
     # must be restored before a second Core-only recreate.
+    recovery_calls = []
     def fail_once():
-        if not observed or observed[-1][0] != expected:
-            raise RuntimeError("test setup error")
-        observed.append((stack.read_bytes(), agent.read_bytes()))
-        if len(observed) == 2:
+        recovery_calls.append((stack.read_bytes(), agent.read_bytes()))
+        if len(recovery_calls) == 1:
             raise RuntimeError("Simulated Docker unhealthy")
     monkeypatch.setattr(manager, "run_compose", fail_once)
     monkeypatch.setattr(sys, "argv", [
@@ -116,7 +115,8 @@ def test_root_worker_preserves_env_and_rolls_back_on_failure(tmp_path, monkeypat
     assert stack.read_bytes() == expected
     assert agent.read_bytes() == expected
     assert json.loads(manager.STATUS.read_text())["state"] == "rolled_back"
-    assert observed[-1][0] == expected
+    assert recovery_calls[0][0] != expected
+    assert recovery_calls[1] == (expected, expected)
 
 
 def test_worker_rejects_non_root_or_invalid_origins(tmp_path, monkeypatch):
