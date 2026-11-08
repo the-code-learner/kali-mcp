@@ -178,6 +178,70 @@ class UI:
             return JSONResponse({"error": "Invalid CSRF token"}, status_code=403)
         return None
 
+    async def _confirm_token_action(self, request: Request, password: str) -> bool:
+        """Reauthenticate the superuser for sensitive token lifecycle operations."""
+        if not password or len(password) > 256:
+            return False
+        path = os.getenv("KALI_MCP_SUPERUSER_FILE", "").strip()
+        if path:
+            try:
+                record = read_record(Path(path))
+                return await asyncio.to_thread(verify, record, request.state.admin_username, password)
+            except (ValueError, OSError):
+                return False
+        return bool(self.cfg.admin_password and secrets.compare_digest(password, self.cfg.admin_password))
+
+    def _token_fingerprint(self) -> str:
+        path = os.getenv("KALI_MCP_SUPERUSER_FILE", "").strip()
+        if path:
+            return record_fingerprint(read_record(Path(path)))
+        return hashlib.sha256(self.cfg.admin_password.encode()).hexdigest()
+
+    async def create_api_token(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        form = await request.form()
+        if (error := self._csrf(request, str(form.get("csrf") or ""))):
+            return error
+        if not await self._confirm_token_action(request, str(form.get("password") or "")):
+            return JSONResponse({"error": "Superuser confirmation required"}, status_code=403)
+        try:
+            names = [v.strip() for v in str(form.get("allowed_tools") or "").split(",") if v.strip()]
+            token_id, token = self.store.create_api_token(
+                str(form.get("name") or ""), self.cfg.resource,
+                self._token_fingerprint(), days=int(form.get("days") or 30),
+                allowed_tools=names, actor="webui:" + request.state.admin_username)
+        except (ValueError, OSError) as exc:
+            return JSONResponse({"error": str(exc)[:160]}, status_code=400)
+        body = ("""<!doctype html><html><head><meta charset="utf-8">
+          <title>Kali MCP - one-time token</title></head><body>
+          <h1>API token created</h1><p>Copy this secret now; it cannot be retrieved later.</p>
+          <textarea readonly rows="4" cols="90">"""
+          + html.escape(token) + """</textarea><p>Credential ID: <code>"""
+          + html.escape(token_id) + """</code></p>
+          <p>Store in a password manager; browser-side llama.cpp may retain it in its profile.</p>
+          <a href="/">Return to dashboard</a></body></html>""")
+        return HTMLResponse(body, headers={"Cache-Control": "no-store", "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "default-src 'none'; style-src 'self'; base-uri 'none'; form-action 'none'"})
+
+    async def revoke_api_token(self, request: Request):
+        if (error := self._admin(request)):
+            return error
+        form = await request.form()
+        if (error := self._csrf(request, str(form.get("csrf") or ""))):
+            return error
+        if not await self._confirm_token_action(request, str(form.get("password") or "")):
+            return JSONResponse({"error": "Superuser confirmation required"}, status_code=403)
+        try:
+            revoked = self.store.revoke_api_token(str(form.get("token_id") or ""),
+                        actor="webui:" + request.state.admin_username)
+        except ValueError:
+            return JSONResponse({"error": "Invalid API token ID"}, status_code=400)
+        if not revoked:
+            return JSONResponse({"error": "API token not found or already revoked"}, status_code=404)
+        return RedirectResponse("/", status_code=303)
+
     async def dashboard(self, request: Request):
         if not request.state.admin:
             return RedirectResponse("/login", status_code=303)
@@ -216,6 +280,23 @@ class UI:
             + '<button type="submit">Revoke access</button></form>'
             + "</td></tr>"
             for c in clients)
+        api_rows = "".join(
+            "<tr><td>" + html.escape(t["name"]) + "</td><td><code>"
+            + html.escape(t["token_id"][:12]) + "</code></td><td>"
+            + ("Revoked" if t["revoked"] else
+               ("Expired" if t["expires"] <= int(time.time()) else "Active"))
+            + "</td><td>" + datetime.fromtimestamp(t["expires"], timezone.utc).strftime("%Y-%m-%d")
+            + "</td><td>"
+            + (datetime.fromtimestamp(t["last_used"], timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+               if t["last_used"] else "Never")
+            + "</td><td>" + html.escape(", ".join(json.loads(t["allowed_tools"])) or "All")
+            + "</td><td>"
+            + (('<form method="post" action="/api/v1/api-tokens/revoke">'
+                '<input type="hidden" name="csrf" value="' + html.escape(request.state.csrf) + '">'
+                '<input type="hidden" name="token_id" value="' + html.escape(t["token_id"]) + '">'
+                '<input type="password" name="password" placeholder="Superuser password" required>'
+                '<button type="submit">Revoke</button></form>') if not t["revoked"] else "")
+            + "</td></tr>" for t in self.store.list_api_tokens(100))
         body = f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
         <title>Kali MCP — Dashboard</title><link rel="stylesheet" href="/static/app.css"></head><body>
         <header><h1>Kali MCP <small>Control Plane</small></h1>
@@ -240,7 +321,22 @@ class UI:
         <p class="muted">Revocation invalidates all active bearer and refresh tokens for that client.</p>
         <table><thead><tr><th>Client</th><th>ID</th><th>State</th><th>Action</th></tr></thead>
         <tbody>{client_rows}</tbody></table></section>
-        <section><h2>Audit</h2><pre id="audit">Loading ...</pre></section>
+        <section><h2>MCP Clients &mdash; API Tokens</h2>
+         <p>API keys work on the same /mcp endpoint as OAuth Code + PKCE. Keys expire,
+         appear once, and never enable disabled host/root capabilities.</p>
+         <form action="/api/v1/api-tokens/create" method="post">
+           <input type="hidden" name="csrf" value="{html.escape(request.state.csrf)}">
+           <label>Client name<input name="name" maxlength="80" required placeholder="llama.cpp WebUI"></label>
+           <label>Expires in days (1-90)<input type="number" min="1" max="90" name="days" value="30" required></label>
+           <label>Tool allowlist (comma-separated; blank permits all)
+             <input name="allowed_tools" placeholder="system_status,tools_search"></label>
+           <label>Confirm superuser password<input type="password" name="password" required autocomplete="current-password"></label>
+           <button type="submit">Create API Token (show once)</button>
+         </form>
+         <table><thead><tr><th>Client</th><th>ID</th><th>Status</th><th>Expires</th>
+           <th>Last used</th><th>Tools</th><th>Action</th></tr></thead><tbody>{api_rows}</tbody></table>
+         </section>
+         <section><h2>Audit</h2><pre id="audit">Loading ...</pre></section>
         </main><script src="/static/app.js" defer></script></body></html>"""
         return HTMLResponse(body, headers={"Cache-Control": "no-store",
             "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'",
