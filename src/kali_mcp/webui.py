@@ -850,7 +850,7 @@ class UI:
             return self._upgrade_notice("Update blocked", guidance)
         try:
             self.policy.require("mcp_updates", actor="webui")
-            checked = self.updates.check(force=True)
+            checked = await asyncio.to_thread(self.updates.check, force=True)
             if checked.get("error"):
                 return self._upgrade_notice("Update check failed",
                     "GitHub could not be checked: " + str(checked["error"])[:200], 503)
