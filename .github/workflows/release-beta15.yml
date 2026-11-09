@@ -1,4 +1,4 @@
-name: Validate Kali MCP beta.15 release candidate
+name: Publish Kali MCP beta.15 (validated hybrid prerelease)
 
 on:
   push:
@@ -123,3 +123,55 @@ jobs:
               -f /opt/kali-mcp/current/kali-mcp-hybrid.yml down -v || true
           fi
 
+
+  publish:
+    name: Publish verified beta.15 prerelease
+    needs: [validate]
+    if: github.repository == 'the-code-learner/kali-mcp' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download artifacts from the successful validation job
+        uses: actions/download-artifact@v4
+        with:
+          name: kali-mcp-beta15-release-assets
+          path: release-assets
+      - name: Check artifact checksums and source consistency
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "0.1.0-beta.15"
+          cmp release-assets/install-hybrid.sh scripts/install-hybrid.sh
+          cmp release-assets/kali-mcp-hybrid.yml kali-mcp-hybrid.yml
+          (cd release-assets && sha256sum --check SHA256SUMS)
+      - name: Require a new release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view v0.1.0-beta.15 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release v0.1.0-beta.15 already exists; refusing to replace it."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags https://github.com/the-code-learner/kali-mcp.git refs/tags/v0.1.0-beta.15 >/dev/null 2>&1; then
+            echo "Tag v0.1.0-beta.15 already exists; refusing to reuse it."
+            exit 1
+          fi
+      - name: Publish beta.15 tag and prerelease assets
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ github.token }}
+          tag_name: v0.1.0-beta.15
+          target_commitish: ${{ github.sha }}
+          name: Kali MCP v0.1.0-beta.15 — Reliable Update Discovery and Core DNS Recovery
+          body_path: docs/BETA15_RELEASE_NOTES.md
+          prerelease: true
+          draft: false
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/install-hybrid.sh
+            release-assets/kali-mcp-hybrid.yml
+            release-assets/SHA256SUMS
