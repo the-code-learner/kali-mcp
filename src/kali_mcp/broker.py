@@ -39,6 +39,10 @@ class Broker:
         self.cfg, self.store = cfg, store
         self.sessions: dict[str, dict] = {}
         self.lock = threading.Lock()
+        # Cancellation must be handled on another IPC handler while a job runs.
+        self._job_lock = threading.Lock()
+        self._active_jobs: dict[str, object] = {}
+        self._cancel_requests: dict[str, float] = {}
         self.max_sessions = 8
         self.max_sessions_per_actor = 2
         self._reaper = threading.Thread(target=self._expire_terminals, daemon=True,
@@ -73,24 +77,85 @@ class Broker:
             return prefix + argv
         return prefix + ["runuser", "-u", self.host_user, "--"] + argv
 
-    def _run(self, command: list[str], *, timeout: int = 60, input_bytes: bytes | None = None) -> dict:
+    @staticmethod
+    def _job_key(job_id: object) -> str | None:
+        if job_id is None:
+            return None
+        if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id):
+            raise BrokerDenied("Invalid job identifier")
+        return job_id
+
+    @staticmethod
+    def _cancelled_result() -> dict:
+        return {"ok": True, "exit_code": 130, "stdout": "", "stderr": "",
+                "timed_out": False, "truncated": False, "cancelled": True}
+
+    def _cancel_job(self, data: dict) -> dict:
+        job_id = self._job_key(data.get("job_id"))
+        if job_id is None:
+            raise BrokerDenied("Missing job identifier")
+        with self._job_lock:
+            now = time.monotonic()
+            # Accept pre-start cancellation without unbounded tombstone growth.
+            for key, ts in list(self._cancel_requests.items()):
+                if now - ts > self.cfg.max_job_seconds + 60:
+                    self._cancel_requests.pop(key, None)
+            if len(self._cancel_requests) >= 128 and job_id not in self._cancel_requests:
+                raise BrokerDenied("Too many pending cancellations")
+            self._cancel_requests[job_id] = now
+            target = self._active_jobs.get(job_id)
+            if isinstance(target, subprocess.Popen):
+                if target.poll() is None:
+                    try:
+                        os.killpg(target.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            elif target is not None:
+                # Registered Docker sandbox container; kill only this job.
+                try:
+                    target.kill()
+                except Exception:
+                    # A container may still be starting or may have exited.
+                    pass
+        return {"ok": True, "job_id": job_id, "accepted": True,
+                "running": target is not None}
+
+    def _run(self, command: list[str], *, timeout: int = 60,
+             input_bytes: bytes | None = None, job_id: str | None = None) -> dict:
         timeout = max(5, min(self.cfg.max_job_seconds, timeout))
-        proc = subprocess.Popen(command, stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        job_id = self._job_key(job_id)
+        with self._job_lock:
+            if job_id and job_id in self._cancel_requests:
+                self._cancel_requests.pop(job_id, None)
+                return self._cancelled_result()
+            proc = subprocess.Popen(command,
+                stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            if job_id:
+                self._active_jobs[job_id] = proc
         timed_out = False
         try:
-            stdout, stderr = proc.communicate(input=input_bytes, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            os.killpg(proc.pid, signal.SIGKILL)
-            stdout, stderr = proc.communicate()
-        return {"ok": True, "exit_code": 124 if timed_out else proc.returncode,
+            try:
+                stdout, stderr = proc.communicate(input=input_bytes, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                stdout, stderr = proc.communicate()
+        finally:
+            with self._job_lock:
+                cancelled = bool(job_id and self._cancel_requests.pop(job_id, None) is not None)
+                if job_id:
+                    self._active_jobs.pop(job_id, None)
+        return {"ok": True, "exit_code": 130 if cancelled else (124 if timed_out else proc.returncode),
                 "stdout": stdout[:100000].decode("utf-8", "replace"),
                 "stderr": stderr[:100000].decode("utf-8", "replace"),
-                "timed_out": timed_out,
+                "timed_out": timed_out and not cancelled, "cancelled": cancelled,
                 "truncated": len(stdout) > 100000 or len(stderr) > 100000}
 
-    def _sandbox(self, script: str, language: str, timeout: int) -> dict:
+    def _sandbox(self, script: str, language: str, timeout: int, job_id: str | None = None) -> dict:
         if language not in {"python", "bash"}:
             raise BrokerDenied("Sandbox supports Python or Bash")
         if len(script.encode()) > 65536:
@@ -147,6 +212,7 @@ class Broker:
         mode = data.get("mode", "sandbox")
         timeout = int(data.get("timeout", 60))
         root = data.get("root") is True
+        job_id = self._job_key(data.get("job_id"))
         script = data.get("script")
         argv = data.get("argv")
         if script is not None:
@@ -156,17 +222,17 @@ class Broker:
             if language not in ("python", "bash"):
                 raise BrokerDenied("Unsupported script language")
             if mode == "sandbox":
-                return self._sandbox(script, language, timeout)
+                return self._sandbox(script, language, timeout, job_id=job_id)
             self.require("host_exec", "allow_host_exec")
             command = ["/usr/bin/python3", "-"] if language == "python" else ["/bin/bash", "-s"]
-            return self._run(self._nsenter(command, root=root), timeout=timeout, input_bytes=script.encode())
+            return self._run(self._nsenter(command, root=root), timeout=timeout, input_bytes=script.encode(), job_id=job_id)
         if argv is None:
             raise BrokerDenied("Missing executable or script")
         argv = validate_argv(argv)
         if mode == "sandbox":
             raise BrokerDenied("Use script execution for a sandbox")
         self.require("host_exec", "allow_host_exec")
-        return self._run(self._nsenter(argv, root=root), timeout=timeout)
+        return self._run(self._nsenter(argv, root=root), timeout=timeout, job_id=job_id)
 
     def _network(self, data: dict) -> dict:
         action = str(data.get("action", ""))
@@ -183,7 +249,7 @@ class Broker:
             raise BrokerDenied("Network changes are disabled until checkpoint rollback support is validated")
         else:
             raise BrokerDenied("Network action not yet implemented with rollback guard")
-        return self._run(self._nsenter(argv, root=action == "disconnect"), timeout=30)
+        return self._run(self._nsenter(argv, root=action == "disconnect"), timeout=30, job_id=data.get("job_id"))
 
     def _terminal(self, action: str, data: dict) -> dict:
         if action == "terminal_open":
@@ -271,6 +337,8 @@ class Broker:
     def dispatch(self, op: str, data: dict) -> dict:
         if op == "ping":
             return {"ok": True, "broker": "available"}
+        if op == "job_cancel":
+            return self._cancel_job(data)
         if op == "execute":
             return self._exec(data)
         if op == "discover":
@@ -282,7 +350,7 @@ class Broker:
         if op == "package_install":
             self.require("package_install", "allow_package_install")
             argv = installer_argv(str(data.get("tool_id") or ""))
-            return self._run(self._nsenter(argv, root=True), timeout=300)
+            return self._run(self._nsenter(argv, root=True), timeout=300, job_id=data.get("job_id"))
         if op == "network":
             return self._network(data)
         if op.startswith("terminal_"):
