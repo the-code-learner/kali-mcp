@@ -801,13 +801,38 @@ class UI:
         return RedirectResponse("/", status_code=303)
 
     async def update_check(self, request: Request):
+        """Report the real GitHub check result; never claim success on failure."""
         if (error := self._admin(request)):
             return error
         form = await request.form()
         if (error := self._csrf(request, str(form.get("csrf") or ""))):
             return error
-        self.updates.check(force=True)
-        self.store.audit("webui", "updates.check", "allow")
+        # GitHub I/O is blocking; do not freeze the ASGI event loop during
+        # the 15-second HTTPS timeout.
+        checked = await asyncio.to_thread(self.updates.check, force=True)
+        failed = bool(checked.get("error"))
+        channel = str(checked.get("channel") or "unknown")
+        latest = checked.get("latest")
+        message = (
+            "GitHub release check failed: " + str(checked["error"])[:180]
+            if failed else
+            "No eligible releases in the " + channel + " channel."
+            if not latest else "Latest eligible release: " + str(latest)
+        )
+        self.store.audit("webui", "updates.check",
+                         "failed" if failed else "allow", message[:300])
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({
+                "ok": not failed,
+                "message": message,
+                **checked,
+            }, status_code=503 if failed else 200,
+                headers={"Cache-Control": "private, no-store"})
+        if failed:
+            return self._upgrade_notice("GitHub release check failed",
+                                        message, 503)
+        if not latest:
+            return self._upgrade_notice("No eligible release", message, 200)
         return RedirectResponse("/", status_code=303)
 
     async def update_install(self, request: Request):
