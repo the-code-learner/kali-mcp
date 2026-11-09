@@ -288,7 +288,7 @@ class NativeAgent(Broker):
             # but not permission to open an unrestricted root terminal.
             self.require("package_install", "allow_package_install")
             argv = installer_argv(str(data.get("tool_id", "")))
-            return self._run(argv, timeout=300)
+            return self._run(argv, timeout=300, job_id=data.get("job_id"))
         return super().dispatch(op, data)
 
 
