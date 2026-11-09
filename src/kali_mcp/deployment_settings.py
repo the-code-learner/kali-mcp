@@ -61,6 +61,8 @@ EDITABLE_FIELDS = (
           "Published host port for Core (changing can disrupt tunnels)"),
     Field("KALI_MCP_BIND_ADDRESS", "Networking", "bind", "127.0.0.1",
           "Host binding interface; 0.0.0.0 exposes the authenticated WebUI"),
+    Field("KALI_MCP_DNS_SERVER", "Networking", "dns_server", "",
+          "Optional Core-only upstream DNS IP; empty uses Docker defaults"),
     Field("KALI_MCP_PUBLIC_URL", "Networking", "origin", "http://localhost:8787",
           "Canonical WebUI/MCP public origin (changing may require new login)", "both"),
 )
@@ -120,6 +122,22 @@ def validate_scope(allow_all: str, allowed: str, denied: str) -> dict:
     return {"allow_all": enabled, "allowed": allow, "denied": deny}
 
 
+def normalize_dns_server(value: str) -> str:
+    """Validate optional numeric upstream resolver without resolving any names."""
+    if value == "":
+        return ""
+    if not isinstance(value, str) or value != value.strip() or len(value) > 64 or "%" in value:
+        raise ValueError("DNS upstream must be an IPv4/IPv6 literal or empty")
+    try:
+        server = ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise ValueError("DNS upstream must be an IPv4/IPv6 literal or empty") from exc
+    if (server.is_loopback or server.is_link_local or server.is_unspecified or
+            server.is_multicast):
+        raise ValueError("DNS upstream cannot be loopback, link-local or multicast")
+    return str(server)
+
+
 def normalized_field(name: str, value: str) -> str:
     field = FIELD_MAP.get(name)
     if field is None:
@@ -128,6 +146,8 @@ def normalized_field(name: str, value: str) -> str:
         raise ValueError("Invalid setting value")
     if field.kind == "cidrs":
         return ",".join(parse_cidrs(value))
+    if field.kind == "dns_server":
+        return normalize_dns_server(value)
     if field.kind == "bool":
         parse_bool(value)
         return value
