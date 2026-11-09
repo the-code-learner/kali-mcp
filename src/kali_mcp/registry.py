@@ -37,10 +37,42 @@ PACKAGE_NAME = re.compile(r"^[a-z0-9][a-z0-9.+-]{0,79}$")
 
 
 def discover(query: str = "") -> list[dict]:
+    """Small ranked, synonym-aware discovery; no tool permissions change."""
+    words = re.findall(r"[a-z0-9]+", query.lower()[:120])
+    stop = {"the", "a", "an", "and", "or", "for", "to", "tool", "tools",
+            "please", "find", "get", "using", "available"}
+    aliases = {
+        "wifi": "wireless", "wlan": "wireless", "wi": "wireless",
+        "recon": "discovery", "reconnaissance": "discovery",
+        "scanning": "scan", "survey": "scan",
+        "hosts": "network", "host": "network",
+        "webserver": "web", "https": "web", "http": "web",
+        "dnslookup": "dns", "packet": "capture",
+    }
+    terms = {aliases.get(w, w) for w in words if w not in stop}
+    ranked = []
+    for index, item in enumerate(BUILTINS):
+        searchable = (item.id + " " + item.description + " " + item.category).lower()
+        extra = {
+            "nmap": "scan scanning discovery network hosts ports",
+            "aircrack-ng": "wifi wireless scan survey security",
+            "kismet": "wifi wireless scan survey access points",
+            "tshark": "packet capture analysis",
+            "tcpdump": "packet capture traffic",
+            "dig": "name resolution dnslookup",
+        }.get(item.id, "")
+        haystack = searchable + " " + extra
+        score = sum(2 if term in searchable else 1
+                    for term in terms if term in haystack)
+        if not terms or score:
+            ranked.append((-score, index, item))
+    ranked.sort()
     return [
-        {"id": t.id, "description": t.description, "category": t.category,
-         "package": t.package, "installed_in_container": bool(shutil.which(t.executable)), "actions": t.actions}
-        for t in BUILTINS if query.lower() in (t.id + " " + t.description + " " + t.category).lower()
+        {"id": item.id, "description": item.description, "category": item.category,
+         "package": item.package,
+         "installed_in_container": bool(shutil.which(item.executable)),
+         "actions": item.actions}
+        for _, _, item in ranked
     ]
 
 
