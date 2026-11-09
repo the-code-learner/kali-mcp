@@ -1,5 +1,7 @@
 # Kali MCP
 
+Latest prerelease notes: [v0.1.0-beta.14](docs/BETA14_RELEASE_NOTES.md) — job cancellation, bounded waits and assessment efficiency.
+
 ## Systemd hybrid beta — v0.1.0-beta.4 (superuser + access hardening)
 
 The preferred architecture now uses **a native systemd Kali Host Agent**
