@@ -1,150 +1,167 @@
-# Kali MCP — systemd hybrid with named superuser (security beta)
+# Hybrid installation and operations — Kali MCP beta.14
 
-The previous privileged-Docker beta is legacy and should not be exposed publicly.
-The recommended mode uses a native systemd Host Agent plus a nonprivileged
-MCP/WebUI container. New security features are verified on Linux AMD64; Kali
-ARM64 hardware and Cloudflare Access still require end-to-end validation.
+**Current recommended deployment:** native **systemd Host Agent** on the Kali/Debian host plus an **unprivileged Docker MCP/WebUI Core**. This guide describes `v0.1.0-beta.14`; the single-YAML privileged-Docker installation documented in [BETA.md](BETA.md) is historical/legacy.
 
-## Initial installation
+> Beta for dedicated assessment/lab appliances, not a guarantee of production-grade remote administration. CI runs real Linux AMD64 systemd/Docker, OAuth, socket-restart and upgrade smoke tests. Raspberry Pi 5 testing has informed the beta, but hardware-specific ARM64, Wi-Fi and deployed edge configurations must be verified separately.
 
-Run from a Kali ARM64/AMD64 checkout with root privileges:
+## Prerequisites and first installation
 
-    sudo bash scripts/install-hybrid.sh
+- Kali Linux or compatible Debian-based host, `aarch64` or `x86_64`, with **systemd**, **apt**, Internet access and sudo.
+- Docker Engine and the Compose plugin; the installer attempts to install missing supported dependencies.
+- An SSH TTY or local console for the guided setup. Do not run an interactive wizard from a detached service.
+- A dedicated strong application-superuser password, distinct from the Linux root account.
 
-The Bash entrypoint validates hardware and dependencies, downloads a GitHub
-release archive, rejects unsafe source members and launches the SSH wizard.
-The wizard requires no curses or keyboard hotkeys. It asks for release channel,
-a **superuser username and strong password**, access method and maximum host/root permissions.
-Re-running the installer preserves configuration; --reconfigure reopens the
-wizard, and --non-interactive uses preset environment variables.
+Use the immutable release assets and verify SHA256 *before* executing the downloaded installer:
 
-For development builds, a full commit SHA can be used instead of a release:
+```bash
+mkdir -p ~/kali-mcp-install && cd ~/kali-mcp-install
+TAG=v0.1.0-beta.14
+BASE="https://github.com/the-code-learner/kali-mcp/releases/download/$TAG"
+curl -fL --retry 3 -o install-hybrid.sh "$BASE/install-hybrid.sh"
+curl -fL --retry 3 -o kali-mcp-hybrid.yml "$BASE/kali-mcp-hybrid.yml"
+curl -fL --retry 3 -o SHA256SUMS "$BASE/SHA256SUMS"
+sha256sum --check SHA256SUMS
 
-    sudo KALI_MCP_VERSION=<full-40-character-commit> bash scripts/install-hybrid.sh
+sudo env KALI_MCP_VERSION="$TAG" KALI_MCP_RELEASE_CHANNEL=beta \
+  bash ./install-hybrid.sh
+```
 
-The new CLI command is installed automatically:
+The text-based SSH wizard asks for a **named application superuser** (username and password), release channel, access mode (`local`, `tailscale`, `cloudflare`), canonical public URL, local binding, and host/root permission ceilings. It stores the effective deployment values in root-owned environment files, starts the native Agent, deploys the unprivileged Core, and verifies the *real Core-to-Agent Unix socket ping*. Existing valid settings are reused unless you explicitly reconfigure them.
 
-    sudo kali-mcp
-    sudo kali-mcp status
-    sudo kali-mcp jobs
-    sudo kali-mcp audit
-    sudo kali-mcp updates
-    sudo kali-mcp toggle host_exec on
-    sudo kali-mcp toggle host_root on
-    sudo kali-mcp access
+Installer flags:
 
-The CLI dashboard is designed for SSH and displays systemd/Docker status,
-recent jobs, active capabilities and endpoint URLs. Root activation requires
-typing ENABLE ROOT and remains off by default.
+| Flag | Purpose |
+| --- | --- |
+| `--upgrade` | Install the selected release while preserving validated configuration |
+| `--reconfigure` | Reopen the SSH wizard to revise settings |
+| `--resume` | Resume an incomplete installation |
+| `--repair` | Repair an incomplete/broken installation |
+| `--non-interactive` | CI/automation with explicitly supplied configuration and credentials (avoid shell-history secrets) |
 
-## Superuser and login protection
+For a development build, `KALI_MCP_VERSION` may be a full 40-character commit SHA; do not mistake a development commit for a signed or validated release.
 
-On first install the SSH wizard creates one **application superuser** (distinct
-from the Linux root account) using a named username and password. It can
-generate a strong password or accept one entered with hidden terminal input.
-Credentials are stored as a salted scrypt password hash (N=131072, r=8, p=1),
-not in Docker environment variables or shell commands.
+## Access the dashboard and MCP
 
-- Canonical root-owned record: `/etc/kali-mcp/superuser.json` (0600).
-- Read-only copy for the Core: `/var/lib/kali-mcp/auth/superuser.json`
-  (root:10001, 0640, mounted read-only in Docker).
-- Login to `/login` requires **username + password**.
-- Every `sudo kali-mcp` CLI invocation requires **Linux sudo and the same
-  named superuser credentials**. The CLI does not accept passwords as flags.
-- Changes to Host Agent privileges additionally require re-entry of the
-  superuser password in WebUI. The Agent validates it against the root-owned
-  record, independently of WebUI session state.
-- Browser sessions use HttpOnly/Secure cookies, CSRF checks, a four-hour
-  lifetime and invalidation when the credential record changes.
-- `sudo kali-mcp wizard` permits credential changes after confirming the old
-  superuser password; then Core/Agent are restarted.
-- For automated local CLI tests only, a root-owned 0600 file may be
-  specified using `KALI_MCP_CLI_PASSWORD_FILE`. Do not expose such a file
-  to untrusted users or put passwords in shell history.
+On the appliance:
 
-Existing beta.3 upgrades **must use the new versioned Bash installer** rather
-than beta.3's in-place `kali-mcp upgrade` command to migrate from the old
-plaintext environment password. After migration, subsequent upgrades can use
-the dashboard again.
+```bash
+sudo kali-mcp status
+sudo kali-mcp
+```
 
-## Exposure and bind-address policy
+Every CLI invocation requires **sudo plus application-superuser authentication**. Without an interactive terminal, the dashboard command prints a status/jobs snapshot instead of the interactive refresh loop.
 
-The default Docker host binding is **127.0.0.1:8787**. The wizard permits
-`KALI_MCP_BIND_ADDRESS=0.0.0.0` only as an explicit choice, with an HTTPS
-canonical origin and a warning about protecting port 8787 by firewall and a
-TLS reverse proxy. **Authentication does not encrypt HTTP.** Never expose
-the raw HTTP origin directly to the untrusted Internet. Cloudflare Tunnel
-(origin localhost) or private Tailscale Serve are safer defaults.
+Default binding: `127.0.0.1:8787`, with the WebUI at `http://localhost:8787`. To browse from a separate machine:
 
-There is no guarantee of zero unauthorized access, especially with unrestricted
-host root enabled. Cloudflare Access with MFA, a restrictive firewall, regular
-security patching and testing of real client OAuth flows remain necessary.
+```bash
+ssh -L 8787:127.0.0.1:8787 <ssh-user>@<pi-address>
+```
 
-## Manage MCP client access
+Open `http://localhost:8787` on the computer that started the tunnel, then authenticate at `/login`. An MCP client uses the **canonical** `<origin>/mcp` endpoint, with OAuth authorization-code/PKCE or a separately issued API token; a successful login does not enable host execution.
 
-The WebUI shows registered OAuth MCP clients and provides a CSRF-protected
-**Revoke access** action. The SSH CLI offers:
+Useful CLI commands:
 
-    sudo kali-mcp clients
-    sudo kali-mcp client-revoke <32-character-client-id>
+```bash
+sudo kali-mcp jobs
+sudo kali-mcp job <job-id>
+sudo kali-mcp audit
+sudo kali-mcp clients
+sudo kali-mcp client-revoke <client-id>
+sudo kali-mcp api-tokens
+sudo kali-mcp api-token-create "my-client" --days 30
+sudo kali-mcp api-token-revoke <token-id>
+sudo kali-mcp updates
+sudo kali-mcp upgrade
+sudo kali-mcp wizard
+sudo kali-mcp access
+```
 
-Both routes require a superuser login; CLI additionally requires sudo.
-Revocation invalidates bearer tokens, refresh tokens and unused authorization
-codes for that client. Changing the superuser password invalidates all
-existing client OAuth tokens and browser sessions.
+The CLI also offers capability toggles (`sudo kali-mcp toggle host_exec on`, etc.) subject to deployment ceilings, superuser verification and extra root confirmation. For accurate supported command syntax use `sudo kali-mcp --help`.
 
-## Trust boundaries
+## Superuser and credential handling
 
-- Core runs as UID 10001 in Docker: no privileged, no Docker socket, no host
-  PID/mount namespace, ALL capabilities dropped, no-new-privileges.
-- Host Agent is a native root systemd service using a restricted Unix socket
-  at /run/kali-mcp-agent/agent.sock with root:kalimcp ownership and mode 0660.
-- Host privilege toggles persist in a root-owned policy file in /etc/kali-mcp;
-  WebUI settings are synchronized to the Agent; its hard ceilings are separate.
-- Core jobs/results and OAuth database persist in /var/lib/kali-mcp/core.
-- The Agent owns access to Docker Engine for short-lived isolated script
-  sandboxes. The Core never mounts Docker's socket.
+The installer generates a salted scrypt password-hash record for the application superuser, **not a plaintext Docker environment variable**.
 
-**The Agent is privileged by design. A compromised Core with socket access
-can still target this trusted Agent API. The WebUI toggle is a consent control,
-not a root-level compromise containment guarantee.**
+- Canonical record: `/etc/kali-mcp/superuser.json` (root-owned, mode 0600).
+- Core-readable hash copy: `/var/lib/kali-mcp/auth/superuser.json` (root:10001, mode 0640), mounted read-only.
+- Core SQLite state: `/var/lib/kali-mcp/core`, including job history and OAuth client state.
+- Agent-owned capability settings and deployment credentials: root-owned host files; the Core cannot directly edit the host's environment files.
+- WebUI uses login sessions, CSRF protections and reauthentication for sensitive Agent changes; the Agent independently validates fresh superuser credentials for privilege-changing requests.
 
-## Remote access setup
+Changing the superuser password revokes existing browser sessions and OAuth/API credentials as implemented by the upgrade/credential migration path. Reconnect clients as needed. Do not store passwords, API tokens or Cloudflare tunnel tokens in the Git repository, a shared terminal history or support tickets. `KALI_MCP_CLI_PASSWORD_FILE` is intended only for tightly controlled local automation with a root-owned 0600 file.
 
-Use sudo kali-mcp access.
+## Security architecture and capability ceilings
 
-Cloudflare Tunnel: the assistant can install cloudflared from Cloudflare's
-signed apt repository, request a remotely-managed Tunnel token invisibly,
-store it in a 0600 file and install a systemd service using --token-file,
-never including the token in process arguments. It asks for explicit
-confirmation that the Cloudflare Access policy has been prepared. The operator
-must configure the public hostname to forward to localhost:8787 and allow
-only necessary OAuth endpoints and the protected MCP resource through Access.
-Admin login and other WebUI routes remain protected by Access.
+```text
+HTTPS client / browser
+        |
+  Core container  (UID 10001, cap_drop=ALL, read-only root, no Docker socket)
+        |
+  /run/kali-mcp-agent/agent.sock  (private Unix socket)
+        |
+  systemd Native Agent  (host root; controlled operations and sandbox manager)
+```
 
-Tailscale: the assistant can install Kali's tailscale apt package, run
-tailscale up and enable Tailscale Serve HTTPS for the private tailnet. Hosted
-ChatGPT or other cloud MCP clients outside the tailnet CANNOT access this
-private service through Serve alone. Funnel is intentionally not auto-enabled.
+The Host Agent uses the `kalimcp` Unix group with a mode-0660 socket; the Core mounts the socket directory read-only. The native service preserves its runtime directory through restarts so an existing Core bind mount does not become stale. A Core healthcheck alone does not prove Agent IPC works; check both.
 
-For cloud MCP clients use a configured HTTPS origin + /mcp and native OAuth.
-For local/private management use SSH forwarding or Tailscale.
+Permission gates are **deliberately separate**: deployment ceilings (`KALI_MCP_ALLOW_HOST_EXEC`, `KALI_MCP_ALLOW_HOST_ROOT`, `KALI_MCP_ALLOW_MCP_HOST_EXEC`, `KALI_MCP_ALLOW_MCP_ROOT`, etc.) and the administrator-controlled Host Agent toggles. All powerful host/root operations are off by default. `host_root` also depends on `host_exec` being enabled. A permitted root shell has powerful host authority and is not contained by the WebUI policy.
 
-## Update behavior
+**Authorized target scope** is a distinct setting:
 
-The CLI scans stable/beta GitHub releases. Re-running the versioned installer
-with --upgrade stages the next release and restarts Agent/Core; if startup
-fails, it attempts to restore the previous source symlink.
+- `KALI_MCP_ALLOWED_CIDRS`: addresses permitted to *typed adapters*.
+- `KALI_MCP_DENIED_CIDRS`: explicit exclusions, always checked first.
+- `KALI_MCP_ALLOW_ALL_TARGETS=true`: administrator-selected permissive mode for authorized testing, without removing the denylist.
 
-This initial approach does not roll back OS packages, kernel, Nexmon,
-database migrations or virtual environment changes. One-click update and
-systemd transient jobs remain planned features.
+Permissive scope is **not** treated as a product failure. CIDR checks in typed adapters do **not** constitute OS-level egress filtering; unrestricted host shell/terminal access can bypass typed-adapter scopes. Set network/firewall restrictions separately when that matters.
 
-## Status and prerequisites
+See [SECURITY.md](SECURITY.md) for trust boundaries and residual risks, and [BETA14_RELEASE_NOTES.md](BETA14_RELEASE_NOTES.md) for cancellation-specific limits.
 
-This mode is NOT yet released or tested on a Kali Raspberry Pi 5. It requires
-Kali/Debian, systemd, apt, Docker Engine and Docker Compose. Host/root mode,
-networking hardware, real Cloudflare Access and installer upgrade/rollback must
-be validated on ARM64 before public exposure.
+## Remote access: Cloudflare and Tailscale
 
-See docs/CLOUDFLARE.md for OAuth path exemptions.
+Run `sudo kali-mcp access` to configure an access method.
+
+**Cloudflare Tunnel:** the CLI attempts an available package install if `cloudflared` is missing and verifies the executable; it does **not** guarantee that a distribution package exists on every Kali architecture. You must configure an HTTPS public hostname, an appropriate Access policy, and the controlled OAuth protocol exceptions. The wizard accepts a *hidden-input* remotely managed Tunnel token, stores it in a root-only file and starts the tunnel with `--token-file`. The tunnel should forward to local port 8787; keep that port bound to localhost. See [CLOUDFLARE.md](CLOUDFLARE.md).
+
+**Tailscale Serve:** can expose HTTPS privately to your tailnet and may update the canonical `*.ts.net` origin after confirmation. A hosted MCP client **outside the tailnet cannot reach Serve alone**; Funnel is not enabled automatically.
+
+The canonical public URL must match the HTTPS browser/MCP hostname (no `/mcp` suffix). Changing it can require OAuth reauthorization. **Never publish the plain HTTP listener directly to the Internet.** Binding `0.0.0.0` is explicit and needs independent firewall plus TLS reverse-proxy controls; password authentication is not transport encryption.
+
+## WebUI / Control Center
+
+The authenticated Control Center provides job history, audit, OAuth/API clients, browser origin allowlisting, update tracking and deployment settings. **Authorized Scope** can be edited there by an authenticated superuser; the change is first **scheduled**, then verified against the running Core and host inventory. A scheduled HTTP 202 response is not proof that the change has taken effect.
+
+If the Agent is unavailable, the settings inventory may be shown as unavailable rather than replaced with fabricated defaults. When recovering from an Agent restart or deployment edit, verify the actual Core and Agent states, not only a green page status.
+
+## Upgrade and rollback boundaries
+
+For an existing hybrid installation, use **Control Center → Updates → Check now**, then review and install the latest eligible release, or run:
+
+```bash
+sudo kali-mcp updates
+sudo kali-mcp upgrade
+```
+
+The installer can also be called with `--upgrade` and an explicit `KALI_MCP_VERSION`. It stages source, takes an online SQLite backup where applicable, activates a versioned directory, restarts Agent/Core and checks the Agent IPC from within the Core. On activation failure it attempts to restore the previous *application source link* and restart services. **This is not a full system rollback:** OS packages, Docker/venv dependencies, kernels, database schema migrations and external services may not be reverted.
+
+Check results after any update:
+
+```bash
+sudo kali-mcp status
+sudo systemctl is-active kali-mcp-agent.service
+sudo test -S /run/kali-mcp-agent/agent.sock
+sudo docker inspect --format '{{.State.Health.Status}}' kali-mcp-core
+sudo docker exec kali-mcp-core /opt/venv/bin/python -c \
+  "import sys; sys.path.insert(0, '/opt/kali-mcp/current/src'); from kali_mcp.broker_client import call; print(call('/run/kali-mcp-agent/agent.sock', 'ping', timeout=5))"
+```
+
+The IPC ping must report `systemd-host-agent`. If setup fails, inspect the **root-only** `/var/log/kali-mcp/install.log` and retry with `--resume` or `--repair` as appropriate. Do not disclose private `.env` files or credential records.
+
+**Legacy migration:** stop the old privileged-Docker `kali-mcp-broker` stack first. The installer intentionally refuses to proceed while it is running. Follow an explicit migration plan; do not run both architectures against the same state.
+
+## Feature and validation status
+
+Implemented as of beta.14: authenticated MCP transport, curated Kali registry, sandbox and approved host operations, persistent jobs, `jobs_wait`, queued/tracked-job `jobs_cancel`, NetworkManager status/scan, file transfer and update tracking.
+
+Not generally supported as complete features: Wi-Fi AP/Nexmon, Ethernet gateway/NAT with safe checkpoint rollback, generalized monitor-mode workflows, full process/cgroup containment, and advanced PCAP presentation. Cancelled jobs can leave independent daemonized descendants; interactive PTYs use `terminal_close`.
+
+See [STATUS.md](STATUS.md) for the detailed matrix and [TESTING.md](TESTING.md) for a practical hardware acceptance checklist.
