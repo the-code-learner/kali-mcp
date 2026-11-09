@@ -1,6 +1,6 @@
-# Development status — Kali MCP beta.15 release candidate
+# Development status — Kali MCP v0.1.0-beta.15
 
-**Latest published prerelease:** [v0.1.0-beta.14](https://github.com/the-code-learner/kali-mcp/releases/tag/v0.1.0-beta.14). **Unpublished beta.15 candidate:** [release notes](BETA15_RELEASE_NOTES.md), native systemd Host Agent plus nonprivileged Docker Core. This is a **beta for dedicated Kali security-assessment appliances**, not a production-hardened remote-access product.
+**Latest published prerelease:** [v0.1.0-beta.15](https://github.com/the-code-learner/kali-mcp/releases/tag/v0.1.0-beta.15). See the [release notes](BETA15_RELEASE_NOTES.md). Current deployment:  native systemd Host Agent plus nonprivileged Docker Core. This is a **beta for dedicated Kali security-assessment appliances**, not a production-hardened remote-access product.
 
 Status terms are deliberately distinct:
 - **Implemented:** the relevant code/API exists; not a guarantee that every host/environment was tested.
@@ -10,7 +10,7 @@ Status terms are deliberately distinct:
 
 ## Current feature matrix
 
-| Area | Beta.15 candidate status | Evidence / limitation |
+| Area | Beta.15 status | Evidence / limitation |
 | --- | --- | --- |
 | Hybrid installation | **Implemented; CI verified** | Native systemd Agent, nonprivileged Docker Core, SSH wizard, health checks, installer re-entry |
 | Local trust boundary | **Implemented; CI verified** | Root systemd Agent behind restricted Unix socket; Core UID 10001, no Docker socket, all capabilities dropped |
@@ -28,7 +28,7 @@ Status terms are deliberately distinct:
 | Control Center configuration | **Implemented; CI verified** | Superuser-authenticated deployment inventory, async changes, effective Core/Agent state and rollback/unverified feedback |
 | File transfers | **Implemented; CI verified** | Per-client workspace, Base64 and one-use signed OpenLink; 100 MB/file limit; no arbitrary host-file access |
 | Updates | **Implemented; CI verified** | Stable/beta release lookup, retry 30–300s after DNS/HTTPS failure, actionable error/retry UI, manually approved install, source staging, SQLite backup and limited rollback |
-| Container DNS override | **Implemented; candidate validation required** | Optional validated `KALI_MCP_DNS_SERVER`, Compose overlay only for Core, explicit source migration from running Core on upgrade; does not affect other containers or host DNS |
+| Container DNS override | **Implemented; CI verified** | Optional validated `KALI_MCP_DNS_SERVER`, Compose overlay only for Core, explicit source migration from running Core on upgrade; does not affect other containers or host DNS |
 | Cloudflare / Tailscale assistants | **Implemented; environment-specific verification required** | CLI setup helpers; public HTTPS/Access policy and private Tailscale Serve must be validated per installation |
 | Wi-Fi AP / Nexmon / general monitor mode | **Not complete** | No supported end-to-end AP or Nexmon workflow; wireless adapter limitations remain |
 | Ethernet gateway / NAT / NetworkManager checkpoint rollback | **Not complete** | Avoid relying on this beta for rollback-safe network reconfiguration |
