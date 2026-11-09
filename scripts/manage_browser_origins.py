@@ -92,8 +92,7 @@ def run_compose() -> None:
     # A Core-only recreation. No container privileged mode, Docker socket
     # mount, or host execution/root MCP toggle is involved.
     subprocess.run([
-        "docker", "compose", "--env-file", str(CONFIG / "stack.env"),
-        "-f", str(ROOT / "kali-mcp-hybrid.yml"),
+        "/bin/bash", str(ROOT / "scripts/compose-hybrid.sh"),
         "up", "-d", "--no-deps", "--force-recreate", "--wait",
         "--wait-timeout", "180", "kali-mcp-core",
     ], check=True, timeout=210)
