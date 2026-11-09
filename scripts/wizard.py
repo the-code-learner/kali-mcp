@@ -17,6 +17,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from kali_mcp.superuser import make_record, read_record, save_record, verify, valid_username, validate_password
 from kali_mcp.browser_origins import parse_browser_origins
+from kali_mcp.deployment_settings import normalize_dns_server
 from urllib.parse import urlparse
 
 ENV = re.compile(r"^([A-Z][A-Z0-9_]*)=([^\r\n]*)$")
@@ -163,6 +164,9 @@ def is_complete(path: Path, *, require_marker: bool = True) -> bool:
             return False
         if not valid_origin(stack["KALI_MCP_PUBLIC_URL"]):
             return False
+        dns_value = stack.get("KALI_MCP_DNS_SERVER", "")
+        if normalize_dns_server(dns_value) != dns_value:
+            return False
         if not (agent.get("KALI_MCP_SUPERUSER_FILE") == "/etc/kali-mcp/superuser.json"):
             return False
         names = ("stack.env", "agent.env", "superuser.json")
@@ -223,6 +227,13 @@ def configure(path: Path, gid: int, *, interactive: bool, host_user: str = "kali
         if interactive and not yesno("I have restricted direct port access by firewall", False):
             raise ValueError("Refusing unprotected wide-area binding")
 
+    # Optional per-Core resolver, opt-in: never pin a particular site's DNS.
+    # Upgrades preserve it; an empty value inherits Docker's default resolver.
+    dns_default = old.get("KALI_MCP_DNS_SERVER", "")
+    dns_value = (ask("Core DNS upstream IP (blank=default Docker DNS)", dns_default)
+                 if interactive else os.getenv("KALI_MCP_DNS_SERVER", dns_default))
+    dns_value = normalize_dns_server(dns_value)
+
     previous_allow = old.get("KALI_MCP_ALLOW_HOST_EXEC", "false") == "true"
     host_exec = (yesno("Permit enabling unprivileged Kali HOST commands in WebUI", previous_allow)
                  if interactive else os.getenv("KALI_MCP_ALLOW_HOST_EXEC", "false") == "true")
@@ -266,13 +277,15 @@ def configure(path: Path, gid: int, *, interactive: bool, host_user: str = "kali
         "KALI_MCP_MAX_JOB_SECONDS": "300",
         "KALI_MCP_PORT": "8787",
         "KALI_MCP_BIND_ADDRESS": bind,
+        "KALI_MCP_DNS_SERVER": dns_value,
         "KALI_MCP_ACCESS_MODE": access,
         "KALI_MCP_AGENT_GID": str(gid),
         "KALI_MCP_BROWSER_ORIGINS": ",".join(origins),
     }
     for name, value in shared.items():
         if value or name not in {"KALI_MCP_BROWSER_ORIGINS",
-                                 "KALI_MCP_DENIED_CIDRS", "KALI_MCP_ALLOWED_CIDRS"}:
+                                 "KALI_MCP_DENIED_CIDRS", "KALI_MCP_ALLOWED_CIDRS",
+                                 "KALI_MCP_DNS_SERVER"}:
             if not SAFE_VALUE.fullmatch(value):
                 raise ValueError("Invalid configuration value for " + name)
     # Validate the effective policy even when resuming an old deployment.
