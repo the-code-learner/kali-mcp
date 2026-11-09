@@ -135,6 +135,7 @@ For a complete command list, run `sudo kali-mcp --help`. The CLI requires intera
 
 ## Updating, troubleshooting and rollback
 
+**DNS in bridged Docker networks:** if the Kali host resolves GitHub but the Core reports `Temporary failure in name resolution`, inspect Core `/etc/resolv.conf` and test a temporary container with `docker run --rm --network current_default --dns <your-host-dns-ip> ...` before changing anything. The *next unreleased build* adds an optional **`KALI_MCP_DNS_SERVER`** Core-only override, configurable in the SSH wizard or Control Center; blank keeps Docker's normal resolver. It is never hard-coded to a public or site-specific DNS server. See [hybrid DNS diagnostics](docs/HYBRID.md#optional-dns-upstream-for-the-core-unreleased).
 **Existing hybrid appliance:** use **Control Center → Updates → Check now** and apply the latest eligible beta after review, or run `sudo kali-mcp upgrade`. The versioned installer also supports `--upgrade`, `--resume` and `--repair`. Upgrades preserve configured application-superuser credentials and scope, and create a safety backup of the Core SQLite database.
 
 Health checks:
