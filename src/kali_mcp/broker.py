@@ -171,8 +171,14 @@ class Broker:
         # argument with inspect while the ephemeral sandbox exists.
         command = (["python", "-B", "-c", script] if language == "python"
                    else ["bash", "-c", script])
+        job_id = self._job_key(job_id)
         container = None
         try:
+            if job_id:
+                with self._job_lock:
+                    if job_id in self._cancel_requests:
+                        self._cancel_requests.pop(job_id, None)
+                        return self._cancelled_result()
             container = client.containers.create(
                 image=os.environ.get("KALI_MCP_SANDBOX_IMAGE", "python:3.12-slim-bookworm"),
                 command=command,
@@ -188,19 +194,47 @@ class Broker:
                 environment={"PYTHONDONTWRITEBYTECODE": "1"},
                 labels={"app": "kali-mcp", "purpose": "sandbox"},
             )
+            if job_id:
+                with self._job_lock:
+                    if job_id in self._cancel_requests:
+                        self._cancel_requests.pop(job_id, None)
+                        return self._cancelled_result()
+                    self._active_jobs[job_id] = container
             container.start()
+            if job_id:
+                with self._job_lock:
+                    should_kill = job_id in self._cancel_requests
+                if should_kill:
+                    try:
+                        container.kill()
+                    except Exception:
+                        pass
             try:
                 result = container.wait(timeout=max(5, min(timeout, self.cfg.max_job_seconds)))
                 exit_code = int(result.get("StatusCode", 1))
             except Exception:
-                container.kill()
+                try:
+                    container.kill()
+                except Exception:
+                    pass
                 exit_code = 124
-            logs = container.logs(stdout=True, stderr=True)
-            return {"ok": True, "exit_code": exit_code,
+            with self._job_lock:
+                cancelled = bool(job_id and job_id in self._cancel_requests)
+            try:
+                logs = container.logs(stdout=True, stderr=True)
+            except Exception:
+                if not cancelled:
+                    raise
+                logs = b""
+            return {"ok": True, "exit_code": 130 if cancelled else exit_code,
                     "stdout": logs[:180000].decode("utf-8", "replace"),
-                    "stderr": "" if exit_code != 124 else "Execution timeout",
-                    "truncated": len(logs) > 180000, "sandbox": True}
+                    "stderr": "" if exit_code != 124 or cancelled else "Execution timeout",
+                    "cancelled": cancelled, "truncated": len(logs) > 180000, "sandbox": True}
         finally:
+            if job_id:
+                with self._job_lock:
+                    self._active_jobs.pop(job_id, None)
+                    self._cancel_requests.pop(job_id, None)
             if container is not None:
                 try:
                     container.remove(force=True)
