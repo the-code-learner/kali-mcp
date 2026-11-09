@@ -1,5 +1,7 @@
 # Changelog
 
+For the current architecture and verified implementation status, see the [beta.14 documentation index](docs/README.md) and [status matrix](docs/STATUS.md). Older entries below are historical snapshots and may describe features later implemented.
+
 ## v0.1.0-beta.14 — cancellable jobs and assessment efficiency
 
 - Add `jobs_wait` bounded long polling, reducing repeated `jobs_get` during long assessments.
@@ -11,6 +13,10 @@
 
 See [beta.14 release notes](docs/BETA14_RELEASE_NOTES.md) for limits and validation details.
 
+
+## Beta.3–beta.13 historical milestones
+
+Detailed records are retained in [beta.3 hybrid notes](docs/HYBRID_BETA_RELEASE_NOTES.md), [beta.4 security notes](docs/SECURITY_BETA_RELEASE_NOTES.md), and [beta.5–13 release notes](docs/README.md#historical-documents-preserved-as-release-snapshots). These earlier notes are not current installation or security guidance.
 
 ## v0.1.0-beta.2 — Portainer single-YAML installation
 

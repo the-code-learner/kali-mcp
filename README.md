@@ -158,6 +158,8 @@ Verified CI is **not** a guarantee of a secure production deployment. Prefer a d
 
 ## Documentation
 
+**[Complete documentation index (current guides vs. historical beta notes)](docs/README.md)**
+
 - [Hybrid installation and trust boundaries](docs/HYBRID.md)
 - [Beta 14 release notes](docs/BETA14_RELEASE_NOTES.md)
 - [Cloudflare Tunnel, Access and OAuth](docs/CLOUDFLARE.md)

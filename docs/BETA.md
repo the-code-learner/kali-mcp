@@ -1,10 +1,14 @@
-# Kali MCP — first beta: Portainer single-YAML installation
+# Legacy beta.2 — Portainer single-YAML installation (historical)
+
+> **Historical documentation only.** This page records the original beta.2 privileged-Docker/Portainer setup and intentionally preserves its old tag, variables and limitations. It is **not the recommended installation for v0.1.0-beta.14**. New installations should follow the [current hybrid systemd + Docker guide](HYBRID.md) or the [root README](../README.md). Do not run both the legacy broker stack and the native Host Agent against the same installation.
+>
+> Current feature availability is listed in [STATUS.md](STATUS.md), current trust boundaries in [SECURITY.md](SECURITY.md), and current release information in [BETA14_RELEASE_NOTES.md](BETA14_RELEASE_NOTES.md). All instructions below apply **only to the historical beta.2 design**.
 
 This early beta is intended for a **dedicated Kali Linux lab appliance**.
 Do not yet enable host root or expose the service publicly until the Kali
 ARM64 and Cloudflare-specific security tests have been completed.
 
-The official installation path uses the **Portainer Stack UI**:
+The **historical beta.2** installation path used the **Portainer Stack UI**:
 **no curl, no nano, no manual Python installation and no auxiliary scripts.**
 
 ## Prerequisites
@@ -14,7 +18,7 @@ The official installation path uses the **Portainer Stack UI**:
 - Network access to Docker Hub, GitHub Releases, GitHub's source archive and PyPI
 - A unique administrator password of 16 or more characters
 
-## Recommended: Portainer Git repository stack
+## Historical beta.2: Portainer Git repository stack
 
 1. In Portainer choose the Docker environment, then **Stacks → Add stack**.
 2. Enter stack name `kali-mcp` and choose **Git repository**.
@@ -40,7 +44,7 @@ volume, and starts the broker and MCP/WebUI with persistent Python environments.
 Portainer fetches the Compose definition from the repository for this approach.
 This is not a requirement to download or edit YAML on the Raspberry Pi.
 
-## Alternative: Portainer Web editor
+## Historical alternative: Portainer Web editor
 
 Choose **Stacks → Add stack → Web editor**, paste the **entire** contents of
 [kali-mcp.yml](../kali-mcp.yml), add the same Stack environment variables and
@@ -88,7 +92,7 @@ alone does **not** force a new application version.
 
 There is no stable release currently; keep the channel `beta` for this beta.
 
-## Current beta feature limits
+## Beta.2-era feature limits (historical)
 
 Available: authenticated WebUI, OAuth MCP, initial tool registry,
 typed read-only actions, persistent job/results/audit status and experimental
