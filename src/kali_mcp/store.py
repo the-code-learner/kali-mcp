@@ -155,6 +155,12 @@ class Store:
                 encoded_result = json.dumps({"truncated": True,
                     "error": "Result exceeded persistent storage limit"})
         with self.lock:
+            row = self.db.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None or row["state"] in {"completed", "failed", "timed_out", "cancelled", "lost"}:
+                # An already-final job must never be overwritten by late IPC.
+                return
+            if state == "running" and row["state"] != "queued":
+                return
             self.db.execute(
                 "UPDATE jobs SET state=?, finished_at=?, result_json=?, exit_code=? WHERE id=?",
                 (state, utc() if state not in ("queued", "running") else None,
