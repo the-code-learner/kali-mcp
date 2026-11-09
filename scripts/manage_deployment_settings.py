@@ -101,6 +101,17 @@ def activate(updates: dict[str, str]) -> None:
     for key, target in updates.items():
         if key in core_keys and values.get(key) != target:
             raise RuntimeError("Core did not apply " + key)
+    if "KALI_MCP_DNS_SERVER" in updates:
+        # DNS is a Docker HostConfig property, not a Core environment var.
+        # Verify the active container, not just Compose's rendered YAML.
+        observed_dns = json.loads(subprocess.check_output([
+            "docker", "inspect", "--format", "{{json .HostConfig.Dns}}", "kali-mcp-core",
+        ], text=True, timeout=15))
+        target_dns = updates["KALI_MCP_DNS_SERVER"]
+        if target_dns and observed_dns != [target_dns]:
+            raise RuntimeError("Core did not apply configured DNS upstream")
+        if not target_dns and observed_dns:
+            raise RuntimeError("Core DNS override was not removed")
     # The native Agent is loaded from agent.env and owns capability ceilings.
     # Restart only when values in its environment change.
     if updates:
