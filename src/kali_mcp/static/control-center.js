@@ -145,6 +145,8 @@ state.runDetails = '';
 state.allowInstall = false;
 state.updateGuidance = '';
 state.updateError = '';
+state.releaseChecked = false;
+state.releaseChannel = 'beta';
 state.updatedAt = null;
 state.serverError = '';
 state.inventoryAvailable = false;
@@ -226,7 +228,7 @@ function liveUpdates(){
  return head('RELEASE MANAGEMENT','Aggiornamenti','Stato effettivo dell’installer systemd, anche dopo il riavvio del Core.',action)+
  '<div class="grid cols3">'+
  stat('Installata',state.installed,'green','server','Versione verificata')+
- stat('Disponibile',state.latest,'blue','update','Release del canale attivo')+
+ stat('Disponibile',state.latest,state.updateError?'red':'blue','update','Canale '+state.releaseChannel)+
  stat('Stato installer',status,failed?'red':completed?'green':'blue','clock','Host Agent persistente')+
  '</div>'+section('Avanzamento installazione')+
  card('<div class="card-top"><div><h2>Installazione</h2><p>Fase attuale: '+
@@ -240,6 +242,14 @@ function liveUpdates(){
    '<ol class="timeline">'+timeline+'</ol>'+
    '<div class="actionrow"><span class="smalltext">Sincronizzazione ogni 3 s · '+
    'La barra indica le fasi, non i byte scaricati.</span></div>','flat')+
+ (state.updateError?'<div class="notice error">'+ic('alert',16)+'<span>'+
+   'La verifica delle release GitHub non è riuscita: '+esc(state.updateError)+
+   '. Controlla l’accesso a api.github.com dal Core o usa sudo kali-mcp updates via SSH.'+
+   '</span></div>':!state.releaseChecked?
+   '<div class="notice">'+ic('info',16)+'<span>Release non ancora verificata. Premi Verifica release per controllare GitHub.</span></div>':
+   state.latest==='Non verificata'?
+   '<div class="notice">'+ic('info',16)+'<span>Nessuna release pubblicata nel canale '+esc(state.releaseChannel)+
+   '. Le versioni beta non compaiono nel canale stable.</span></div>':'')+
  (state.updateGuidance?'<div class="notice">'+ic('info',16)+'<span>'+
    esc(state.updateGuidance)+'</span></div>':'')+
  section('Impostazioni aggiornamenti')+
@@ -378,6 +388,8 @@ function applyLive(data){
  state.allowInstall=data.updates?.install_allowed===true;
  state.updateGuidance=String(data.updates?.guidance||'');
  state.updateError=String(data.updates?.error||'');
+ state.releaseChecked=data.updates?.checked===true;
+ state.releaseChannel=String(data.updates?.channel||'beta');
  const run=data.updates?.run||{};
  state.updateRun=String(run.state||'idle');
  state.updatePhase=String(run.phase||'scheduled');
@@ -498,7 +510,7 @@ async function postLive(path, form, options={}){
      if(response.headers.get('content-type')?.includes('application/json')){
        try{msg=JSON.parse(text).error||msg;}catch(e){}
      }
-     toast('Modifica non applicata: '+msg,'bad');
+     toast((path==='/api/v1/updates/check'?'Verifica release non riuscita: ':'Modifica non applicata: ')+msg,'bad');
      return null;
    }
    if(wantsJSON){
@@ -507,7 +519,10 @@ async function postLive(path, form, options={}){
        toast('Risposta del server non verificabile. Ricontrolla lo stato prima di ripetere.','bad');
        return null;
      }
-     if(result.scheduled)toast('Modifica programmata. Attendo la conferma del worker systemd.');
+     if(path==='/api/v1/updates/check'){
+       toast(result.latest?'Release GitHub verificata: '+String(result.latest):
+         'Verifica completata: nessuna release nel canale '+String(result.channel||'selezionato'));
+     }else if(result.scheduled)toast('Modifica programmata. Attendo la conferma del worker systemd.');
      else if(result.unchanged)toast('Configurazione già identica sul server.');
      else toast('Risposta ricevuta, verifico l\'applicazione effettiva.');
      await refreshLive();
@@ -586,7 +601,7 @@ function liveAction(action,el){
  if(action==='fail-next'||action==='reset-demo'||action==='upload'){
    return toast('Questa operazione di simulazione non è disponibile nella produzione.','bad');
  }
- if(action==='check-update')return void postLive('/api/v1/updates/check',{});
+ if(action==='check-update')return void postLive('/api/v1/updates/check',{}, {expectJSON:true});
  if(action==='install'){
    if(!state.allowInstall)return toast(state.updateGuidance||'Installazione non autorizzata','bad');
    return modal('Conferma aggiornamento',
