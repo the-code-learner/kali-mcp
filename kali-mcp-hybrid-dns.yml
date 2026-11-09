@@ -1,0 +1,7 @@
+# Optional per-Core DNS resolver. Used ONLY when KALI_MCP_DNS_SERVER is
+# explicitly configured by the operator; no public DNS or site address is
+# hard-coded. Always combine after kali-mcp-hybrid.yml.
+services:
+  kali-mcp-core:
+    dns:
+      - "${KALI_MCP_DNS_SERVER:?Configure a validated upstream DNS IP}"

@@ -104,8 +104,8 @@ def print_status() -> None:
         print("Host Agent IPC     : offline", error)
     if COMPOSE.exists() and (ETC / "stack.env").exists():
         try:
-            output = run("docker", "compose", "--env-file", str(ETC / "stack.env"),
-                         "-f", str(COMPOSE), "ps", capture=True)
+            output = run("bash", str(ROOT / "current/scripts/compose-hybrid.sh"),
+                         "ps", capture=True)
             print("\n" + output.stdout.strip())
         except OSError:
             print("docker compose unavailable")
@@ -348,8 +348,8 @@ def set_public_origin(origin: str) -> None:
         for path in paths:
             set_value(path, "KALI_MCP_PUBLIC_URL", origin)
         run("systemctl", "restart", "kali-mcp-agent.service", check=True)
-        run("docker", "compose", "--env-file", str(ETC / "stack.env"),
-            "-f", str(COMPOSE), "up", "-d", "--force-recreate",
+        run("bash", str(ROOT / "current/scripts/compose-hybrid.sh"),
+            "up", "-d", "--force-recreate",
             "--wait", "--wait-timeout", "300", check=True)
     except Exception:
         for path, content in old.items():

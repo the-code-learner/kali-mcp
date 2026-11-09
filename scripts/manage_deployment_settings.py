@@ -82,8 +82,7 @@ def patch_env(raw: bytes, updates: dict[str, str]) -> bytes:
 def activate(updates: dict[str, str]) -> None:
     """Restart unprivileged Core and Agent after atomically applying settings."""
     subprocess.run([
-        "docker", "compose", "--env-file", str(CONFIG / "stack.env"),
-        "-f", str(ROOT / "kali-mcp-hybrid.yml"),
+        "/bin/bash", str(ROOT / "scripts/compose-hybrid.sh"),
         "up", "-d", "--no-deps", "--force-recreate", "--wait",
         "--wait-timeout", "180", "kali-mcp-core",
     ], check=True, timeout=210)
@@ -92,7 +91,7 @@ def activate(updates: dict[str, str]) -> None:
     # Bind/host port are Docker Compose *publishing* settings, not Core
     # environment variables; Docker's healthy status verifies their rollout.
     # Everything else is passed to Core's explicit environment mapping.
-    core_keys = sorted(set(updates) - {"KALI_MCP_PORT", "KALI_MCP_BIND_ADDRESS"})
+    core_keys = sorted(set(updates) - {"KALI_MCP_PORT", "KALI_MCP_BIND_ADDRESS", "KALI_MCP_DNS_SERVER"})
     observed = subprocess.check_output([
         "docker", "exec", "kali-mcp-core", "/opt/venv/bin/python",
         "-c", "import os,json; print(json.dumps({k:os.getenv(k) for k in "+
@@ -102,6 +101,17 @@ def activate(updates: dict[str, str]) -> None:
     for key, target in updates.items():
         if key in core_keys and values.get(key) != target:
             raise RuntimeError("Core did not apply " + key)
+    if "KALI_MCP_DNS_SERVER" in updates:
+        # DNS is a Docker HostConfig property, not a Core environment var.
+        # Verify the active container, not just Compose's rendered YAML.
+        observed_dns = json.loads(subprocess.check_output([
+            "docker", "inspect", "--format", "{{json .HostConfig.Dns}}", "kali-mcp-core",
+        ], text=True, timeout=15))
+        target_dns = updates["KALI_MCP_DNS_SERVER"]
+        if target_dns and observed_dns != [target_dns]:
+            raise RuntimeError("Core did not apply configured DNS upstream")
+        if not target_dns and observed_dns:
+            raise RuntimeError("Core DNS override was not removed")
     # The native Agent is loaded from agent.env and owns capability ceilings.
     # Restart only when values in its environment change.
     if updates:

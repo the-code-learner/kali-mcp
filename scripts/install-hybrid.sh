@@ -334,10 +334,19 @@ rollback() {
     ln -sfn "$OLD" "$ROOT/.rollback-link"
     mv -Tf "$ROOT/.rollback-link" "$ROOT/current"
     systemctl restart kali-mcp-agent.service || true
-    docker compose --env-file "$CONFIG/stack.env" -f "$ROOT/current/kali-mcp-hybrid.yml" \
-      up -d --force-recreate || true
+    run_core_compose up -d --force-recreate || true
   fi
   exit "$code"
+}
+# All Core recreation paths must share the same optional DNS overlay.
+# The fallback is for rollback to a pre-DNS release that lacks the helper.
+run_core_compose() {
+  if test -f "$ROOT/current/scripts/compose-hybrid.sh"; then
+    bash "$ROOT/current/scripts/compose-hybrid.sh" "$@"
+  else
+    docker compose --env-file "$CONFIG/stack.env" \
+      -f "$ROOT/current/kali-mcp-hybrid.yml" "$@"
+  fi
 }
 trap rollback ERR
 phase activation
@@ -363,10 +372,9 @@ for count in 1 2 3 4 5 6 7 8 9 10; do
   sleep 1
 done
 test -S /run/kali-mcp-agent/agent.sock
-docker compose --env-file "$CONFIG/stack.env" -f "$ROOT/current/kali-mcp-hybrid.yml" config --quiet
+run_core_compose config --quiet
 phase healthcheck
-docker compose --env-file "$CONFIG/stack.env" -f "$ROOT/current/kali-mcp-hybrid.yml" \
-  up -d --force-recreate --wait --wait-timeout 300
+run_core_compose up -d --force-recreate --wait --wait-timeout 300
 # A healthy HTTP listener alone does NOT prove the root Native Host Agent
 # socket is reachable from the unprivileged Core. After a service restart,
 # Docker may otherwise retain a stale bind mount of /run/kali-mcp-agent.

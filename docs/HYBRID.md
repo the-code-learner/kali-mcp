@@ -160,6 +160,28 @@ The IPC ping must report `systemd-host-agent`. If setup fails, inspect the **roo
 
 ## Feature and validation status
 
+## Optional DNS upstream for the Core (unreleased)
+
+The published beta.14 has a known observability gap: `/mcp` and the host may work even if the Core cannot resolve `api.github.com` through Docker's `127.0.0.11` embedded resolver. An explicit DNS server on the same Docker network was confirmed to restore name resolution in a field test.
+
+**The upcoming source build (not yet available in a tagged release)** provides `KALI_MCP_DNS_SERVER`: an optional numeric IPv4/IPv6 upstream *for the Core container only*. The default is **empty**, preserving Docker behavior. An operator may configure the DNS from the SSH wizard or in the Control Center's Networking settings. Non-empty values are validated; loopback, multicast, unspecified and link-local addresses are rejected. No DNS server or network segment is hard-coded. Other containers, the host resolver, Docker daemon config and authorized assessment CIDRs are left unchanged.
+
+The canonical Compose helper `scripts/compose-hybrid.sh` applies the DNS overlay on installer activation, WebUI settings changes, Core restarts and CLI origin changes; the worker validates the Core's effective Docker DNS setting. If your DHCP lease/server changes, reassess this manually selected address.
+
+Read-only diagnosis on current appliances:
+
+```bash
+sudo /usr/local/bin/kali-mcp updates
+sudo docker exec kali-mcp-core cat /etc/resolv.conf
+sudo docker inspect kali-mcp-core \
+  --format 'Network={{.HostConfig.NetworkMode}} DNS={{json .HostConfig.Dns}}'
+sudo docker exec kali-mcp-core /opt/venv/bin/python -c \
+  'import socket; print(socket.gethostbyname("api.github.com"))'
+```
+
+A `Temporary failure in name resolution` indicates DNS failure; success connecting to a numeric HTTPS address separately proves that TCP egress is available. Avoid globally editing Docker's DNS or restarting the daemon until you have determined whether other containers depend on it.
+
+
 Implemented as of beta.14: authenticated MCP transport, curated Kali registry, sandbox and approved host operations, persistent jobs, `jobs_wait`, queued/tracked-job `jobs_cancel`, NetworkManager status/scan, file transfer and update tracking.
 
 Not generally supported as complete features: Wi-Fi AP/Nexmon, Ethernet gateway/NAT with safe checkpoint rollback, generalized monitor-mode workflows, full process/cgroup containment, and advanced PCAP presentation. Cancelled jobs can leave independent daemonized descendants; interactive PTYs use `terminal_close`.

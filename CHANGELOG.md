@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — optional Core DNS upstream
+
+- Add an administrator-configurable `KALI_MCP_DNS_SERVER` opt-in resolver for the Docker Core only. The default remains Docker-managed DNS; no site-specific or public resolver is forced.
+- Ensure all managed Core recreation paths keep the same DNS overlay; validate the applied Docker host DNS configuration and retain the setting on upgrades.
+- Cover DNS address validation, SSH wizard persistence and Compose rendering in regression tests.
+- This feature is **not included in the immutable v0.1.0-beta.14 release** until a new version is tagged and published.
+
+
 For the current architecture and verified implementation status, see the [beta.14 documentation index](docs/README.md) and [status matrix](docs/STATUS.md). Older entries below are historical snapshots and may describe features later implemented.
 
 ## v0.1.0-beta.14 — cancellable jobs and assessment efficiency
