@@ -92,19 +92,38 @@ def query_releases(repo: str, *, timeout: int = 15) -> list[dict]:
 
 
 class UpdateChecker:
+    """Bounded failed-lookup retries, independent of the long success interval."""
+
+    RETRY_FIRST_SECONDS = 30
+    RETRY_LIMIT_SECONDS = 300
+
     def __init__(self, repo: str, channel: str, interval: int):
         self.repo, self.channel, self.interval = repo, channel, interval
         self.last_checked = 0.0
         self.last_error = ""
         self.latest: Release | None = None
+        self.failed_attempts = 0
+
+    def retry_in_seconds(self) -> float:
+        """Next lookup deadline: short backoff on failure, normal interval on success."""
+        if not self.last_checked:
+            return 0.0
+        if self.last_error:
+            delay = min(self.RETRY_LIMIT_SECONDS,
+                        self.RETRY_FIRST_SECONDS * (2 ** min(self.failed_attempts - 1, 4)))
+        else:
+            delay = self.interval
+        return max(0.0, delay - (time.monotonic() - self.last_checked))
 
     def check(self, *, force: bool = False) -> dict:
-        if force or time.monotonic() - self.last_checked >= self.interval:
+        if force or self.retry_in_seconds() <= 0:
             try:
                 self.latest = select_release(query_releases(self.repo), self.channel)
                 self.last_error = ""
+                self.failed_attempts = 0
             except Exception as exc:
-                self.last_error = f"{type(exc).__name__}: {exc}"
+                self.last_error = f"{type(exc).__name__}: {exc}"[:300]
+                self.failed_attempts += 1
             self.last_checked = time.monotonic()
         return self.status()
 
@@ -115,5 +134,6 @@ class UpdateChecker:
             "prerelease": bool(self.latest and self.latest.prerelease),
             "error": self.last_error,
             "checked": bool(self.last_checked),
+            "retry_seconds": round(self.retry_in_seconds()) if self.last_checked else 0,
             "install_automatic": False,
         }

@@ -4,7 +4,7 @@
 
 The project has two architectural generations. Documentation for the old **privileged-Docker single-YAML** release is retained for historical reference; the current recommendation is the **native systemd Host Agent + unprivileged Docker Core** hybrid installation. Do not follow the old beta.2 Portainer guide for new installs.
 
-## Current guides (maintained for beta.14)
+## Current guides (beta.14 published / beta.15 candidate)
 
 | Document | Purpose |
 | --- | --- |
@@ -14,7 +14,8 @@ The project has two architectural generations. Documentation for the old **privi
 | [Developer and Raspberry Pi testing](TESTING.md) | Python/CI commands, hybrid checks and physical ARM64 acceptance checklist |
 | [Cloudflare, OAuth and browser MCP](CLOUDFLARE.md) | Narrow Access path policy, origins, tokens, browser CORS and signed transfer links |
 | [MCP file transfers](MCP_FILE_TRANSFERS.md) | Current Base64/OpenLink contract and retention/size limits (introduced in beta.10) |
-| [Beta.14 release notes](BETA14_RELEASE_NOTES.md) | Job cancellation, bounded job waits and scope policy unchanged by upgrade |
+| [Beta.14 release notes](BETA14_RELEASE_NOTES.md) | Published historical beta.14 milestone |
+| [Beta.15 candidate notes](BETA15_RELEASE_NOTES.md) | Recovery from GitHub DNS errors, optional Core DNS and migration-safe upgrade |
 
 The [project CHANGELOG](../CHANGELOG.md) records major milestones. Source code, current tests and actual running settings take precedence over archived descriptions when there is a difference.
 

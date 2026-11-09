@@ -281,6 +281,12 @@ else
   echo 'Reusing committed settings. Use --reconfigure to run the wizard.'
 fi
 "${VERIFY[@]}" || { echo 'Wizard did not produce a complete configuration' >&2; exit 1; }
+# Preserve the explicitly selected DNS upstream from an already-running Core
+# when upgrading from a beta that used a local Docker Compose override.
+if test "$UPGRADE" = true; then
+  python3 "$TARGET/scripts/preserve_core_dns.py" --config-dir "$CONFIG"
+fi
+"${VERIFY[@]}" || { echo 'DNS configuration migration failed validation' >&2; exit 1; }
 chmod 0600 "$CONFIG"/*.env "$CONFIG/superuser.json" "$CONFIG/config.ready"
 phase credentials
 # Keep the canonical superuser hash root-only. Core receives an immutable,
@@ -363,6 +369,11 @@ export PYTHONPATH=/opt/kali-mcp/current/src:/opt/kali-mcp/current
 exec /opt/kali-mcp/agent-venv/bin/python -m kali_mcp.cli "$@"
 WRAPPER
 chmod 0755 /usr/local/bin/kali-mcp
+# Some Kali sudo secure_path settings omit /usr/local/bin. Provide a
+# non-clobbering /usr/bin entry point rather than editing sudoers or PATH.
+if test ! -e /usr/bin/kali-mcp && test ! -L /usr/bin/kali-mcp; then
+  ln -s /usr/local/bin/kali-mcp /usr/bin/kali-mcp
+fi
 
 systemctl daemon-reload
 systemctl enable kali-mcp-agent.service

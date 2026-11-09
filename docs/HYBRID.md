@@ -160,11 +160,11 @@ The IPC ping must report `systemd-host-agent`. If setup fails, inspect the **roo
 
 ## Feature and validation status
 
-## Optional DNS upstream for the Core (unreleased)
+## Optional DNS upstream for the Core (beta.15 candidate)
 
-The published beta.14 has a known observability gap: `/mcp` and the host may work even if the Core cannot resolve `api.github.com` through Docker's `127.0.0.11` embedded resolver. An explicit DNS server on the same Docker network was confirmed to restore name resolution in a field test.
+The published beta.14 has a known observability gap: `/mcp` and the host may work even if the Core cannot resolve `api.github.com` through Docker's `127.0.0.11` embedded resolver. An explicit DNS server on the same Docker network was confirmed to restore name resolution in a field test. The beta.15 upgrade installer also migrates a single explicit DNS setting from an already-running Core using a previous local Compose override; this requires invoking **the beta.15 release installer**, not the old beta.14 CLI upgrade. See [release candidate notes](BETA15_RELEASE_NOTES.md).
 
-**The upcoming source build (not yet available in a tagged release)** provides `KALI_MCP_DNS_SERVER`: an optional numeric IPv4/IPv6 upstream *for the Core container only*. The default is **empty**, preserving Docker behavior. An operator may configure the DNS from the SSH wizard or in the Control Center's Networking settings. Non-empty values are validated; loopback, multicast, unspecified and link-local addresses are rejected. No DNS server or network segment is hard-coded. Other containers, the host resolver, Docker daemon config and authorized assessment CIDRs are left unchanged.
+**The beta.15 candidate (not yet published in a tagged release)** provides `KALI_MCP_DNS_SERVER`: an optional numeric IPv4/IPv6 upstream *for the Core container only*. The default is **empty**, preserving Docker behavior. An operator may configure the DNS from the SSH wizard or in the Control Center's Networking settings. Non-empty values are validated; loopback, multicast, unspecified and link-local addresses are rejected. No DNS server or network segment is hard-coded. Other containers, the host resolver, Docker daemon config and authorized assessment CIDRs are left unchanged.
 
 The canonical Compose helper `scripts/compose-hybrid.sh` applies the DNS overlay on installer activation, WebUI settings changes, Core restarts and CLI origin changes; the worker validates the Core's effective Docker DNS setting. If your DHCP lease/server changes, reassess this manually selected address.
 

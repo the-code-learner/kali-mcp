@@ -147,6 +147,7 @@ state.updateGuidance = '';
 state.updateError = '';
 state.releaseChecked = false;
 state.releaseChannel = 'beta';
+state.releaseRetry = 0;
 state.updatedAt = null;
 state.serverError = '';
 state.inventoryAvailable = false;
@@ -159,6 +160,12 @@ function liveBadge(value, category) { return badge(String(value), category || 'b
 function liveOverview() {
  const updating = ['scheduled','running'].includes(state.updateRun);
  const health = state.agentOnline ? 'Connesso' : 'Non disponibile';
+ const releaseLabel = state.updateError ? 'Errore GitHub' :
+   !state.releaseChecked ? 'Non verificata' :
+   state.latest==='Non verificata' ? 'Nessuna release' :
+   state.latest===state.installed ? 'Aggiornato' : 'Da verificare';
+ const releaseColor = state.updateError ? 'red' :
+   state.latest===state.installed ? 'green' : 'blue';
  const rows = state.events.slice(0,5).map(x =>
    '<div class="setting-row"><div class="grow"><div class="label">'+esc(x.action)+'</div><p>'+
    esc(x.actor)+' · '+esc(x.detail || '—')+'</p></div>'+
@@ -173,10 +180,13 @@ function liveOverview() {
    '</div>'+section('Da controllare','Stato aggiornato automaticamente')+
    '<div class="grid cols2">'+
    card('<div class="card-top"><div><h2>'+ic('update',16)+' Aggiornamenti</h2><p>Stato installer persistente sul Native Agent.</p></div>'+
-     liveBadge(updating?'In corso':state.updateRun==='failed'?'Fallito':state.updateRun==='rolled_back'?'Rollback': 'Disponibile',
-       updating?'orange':state.updateRun==='failed'?'red':'blue')+'</div>'+
+     liveBadge(updating?'In corso':state.updateRun==='failed'?'Fallito':state.updateRun==='rolled_back'?'Rollback':releaseLabel,
+       updating?'orange':state.updateRun==='failed'?'red':releaseColor)+'</div>'+
      '<div class="split"><div class="smalltext">Installata <strong>'+esc(state.installed)+
-     '</strong><br>GitHub: '+esc(state.latest)+'</div>'+button('Apri','goto-updates','primary')+'</div>'+
+     '</strong><br>GitHub: '+esc(state.updateError ? 'Verifica fallita' : state.latest)+
+     (state.updateError ? '<br><span class="micro">Causa: '+esc(state.updateError)+
+       ' · Nuovo tentativo entro '+esc(state.releaseRetry)+' s</span>' : '')+
+     '</div>'+button('Apri','goto-updates','primary')+'</div>'+
      (updating?'<div class="bar" style="margin-top:14px"><i style="width:'+
        Math.max(7,Math.round((state.updateIndex+1)/LIVE_PHASES.length*100))+'%"></i></div>':''))+
    card('<div class="card-top"><div><h2>'+ic('shield',16)+' Authorized Scope</h2><p>Blacklist prioritaria sugli adapter tipizzati.</p></div>'+
@@ -244,7 +254,8 @@ function liveUpdates(){
    'La barra indica le fasi, non i byte scaricati.</span></div>','flat')+
  (state.updateError?'<div class="notice error">'+ic('alert',16)+'<span>'+
    'La verifica delle release GitHub non è riuscita: '+esc(state.updateError)+
-   '. Controlla l’accesso a api.github.com dal Core o usa sudo kali-mcp updates via SSH.'+
+   '. Riprovo automaticamente tra circa '+esc(state.releaseRetry)+
+   ' s. Controlla DNS/HTTPS dal Core oppure usa sudo /usr/local/bin/kali-mcp updates via SSH.'+
    '</span></div>':!state.releaseChecked?
    '<div class="notice">'+ic('info',16)+'<span>Release non ancora verificata. Premi Verifica release per controllare GitHub.</span></div>':
    state.latest==='Non verificata'?
@@ -390,6 +401,7 @@ function applyLive(data){
  state.updateError=String(data.updates?.error||'');
  state.releaseChecked=data.updates?.checked===true;
  state.releaseChannel=String(data.updates?.channel||'beta');
+ state.releaseRetry=Number(data.updates?.retry_seconds||0);
  const run=data.updates?.run||{};
  state.updateRun=String(run.state||'idle');
  state.updatePhase=String(run.phase||'scheduled');
