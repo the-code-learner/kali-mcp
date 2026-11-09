@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.1.0-beta.14 — cancellable jobs and assessment efficiency
+
+- Add `jobs_wait` bounded long polling, reducing repeated `jobs_get` during long assessments.
+- Implement `jobs_cancel` for queued and broker-tracked running jobs, including non-root host process groups and sandbox containers; preserve terminal state and audit cancellation.
+- Improve plain-language tool discovery and add the `wifi_scan` read-only alias.
+- Encourage evidence-graded reporting: passive RF findings are distinct from active scans.
+- Keep permissive assessment target configuration under explicit administrator control; retain deny-first CIDR behavior and privilege gates.
+- Add lifecycle/scope regression tests and a gated hybrid beta.14 release workflow.
+
+See [beta.14 release notes](docs/BETA14_RELEASE_NOTES.md) for limits and validation details.
+
+
 ## v0.1.0-beta.2 — Portainer single-YAML installation
 
 - Replaced manual download/edit installation instructions with Portainer Git repository or Web Editor deployment.
