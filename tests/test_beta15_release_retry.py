@@ -1,14 +1,14 @@
 """Release discovery retries after temporary Core DNS failures."""
 from __future__ import annotations
 
-import pytest
+from types import SimpleNamespace
 
 import kali_mcp.releases as releases
 
 
 def test_error_retries_automatically_and_returns_to_normal_interval(monkeypatch):
     tick = [1000.0]
-    monkeypatch.setattr(releases.time, "monotonic", lambda: tick[0])
+    monkeypatch.setattr(releases, "time", SimpleNamespace(monotonic=lambda: tick[0]))
     calls = [0]
 
     def flaky(repository):
@@ -42,7 +42,7 @@ def test_error_retries_automatically_and_returns_to_normal_interval(monkeypatch)
 
 def test_force_update_overrides_failure_backoff(monkeypatch):
     tick = [2000.0]
-    monkeypatch.setattr(releases.time, "monotonic", lambda: tick[0])
+    monkeypatch.setattr(releases, "time", SimpleNamespace(monotonic=lambda: tick[0]))
     queue = iter([OSError("DNS failed"), []])
 
     def query(repository):
@@ -63,7 +63,7 @@ def test_force_update_overrides_failure_backoff(monkeypatch):
 
 def test_retry_interval_backoff_is_bounded(monkeypatch):
     tick = [3000.0]
-    monkeypatch.setattr(releases.time, "monotonic", lambda: tick[0])
+    monkeypatch.setattr(releases, "time", SimpleNamespace(monotonic=lambda: tick[0]))
 
     def broken(repository):
         raise TimeoutError("DNS timeout")
