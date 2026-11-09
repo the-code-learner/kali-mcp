@@ -369,6 +369,11 @@ export PYTHONPATH=/opt/kali-mcp/current/src:/opt/kali-mcp/current
 exec /opt/kali-mcp/agent-venv/bin/python -m kali_mcp.cli "$@"
 WRAPPER
 chmod 0755 /usr/local/bin/kali-mcp
+# Some Kali sudo secure_path settings omit /usr/local/bin. Provide a
+# non-clobbering /usr/bin entry point rather than editing sudoers or PATH.
+if test ! -e /usr/bin/kali-mcp && test ! -L /usr/bin/kali-mcp; then
+  ln -s /usr/local/bin/kali-mcp /usr/bin/kali-mcp
+fi
 
 systemctl daemon-reload
 systemctl enable kali-mcp-agent.service
