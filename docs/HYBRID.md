@@ -1,6 +1,6 @@
-# Hybrid installation and operations — Kali MCP beta.14
+# Hybrid installation and operations — Kali MCP beta.15
 
-**Current recommended deployment:** native **systemd Host Agent** on the Kali/Debian host plus an **unprivileged Docker MCP/WebUI Core**. This guide describes `v0.1.0-beta.14`; the single-YAML privileged-Docker installation documented in [BETA.md](BETA.md) is historical/legacy.
+**Current recommended deployment:** native **systemd Host Agent** on the Kali/Debian host plus an **unprivileged Docker MCP/WebUI Core**. This guide describes `v0.1.0-beta.15`; the single-YAML privileged-Docker installation documented in [BETA.md](BETA.md) is historical/legacy.
 
 > Beta for dedicated assessment/lab appliances, not a guarantee of production-grade remote administration. CI runs real Linux AMD64 systemd/Docker, OAuth, socket-restart and upgrade smoke tests. Raspberry Pi 5 testing has informed the beta, but hardware-specific ARM64, Wi-Fi and deployed edge configurations must be verified separately.
 
@@ -15,7 +15,7 @@ Use the immutable release assets and verify SHA256 *before* executing the downlo
 
 ```bash
 mkdir -p ~/kali-mcp-install && cd ~/kali-mcp-install
-TAG=v0.1.0-beta.14
+TAG=v0.1.0-beta.15
 BASE="https://github.com/the-code-learner/kali-mcp/releases/download/$TAG"
 curl -fL --retry 3 -o install-hybrid.sh "$BASE/install-hybrid.sh"
 curl -fL --retry 3 -o kali-mcp-hybrid.yml "$BASE/kali-mcp-hybrid.yml"
@@ -160,11 +160,11 @@ The IPC ping must report `systemd-host-agent`. If setup fails, inspect the **roo
 
 ## Feature and validation status
 
-## Optional DNS upstream for the Core (beta.15 candidate)
+## Optional DNS upstream for the Core (beta.15)
 
-The published beta.14 has a known observability gap: `/mcp` and the host may work even if the Core cannot resolve `api.github.com` through Docker's `127.0.0.11` embedded resolver. An explicit DNS server on the same Docker network was confirmed to restore name resolution in a field test. The beta.15 upgrade installer also migrates a single explicit DNS setting from an already-running Core using a previous local Compose override; this requires invoking **the beta.15 release installer**, not the old beta.14 CLI upgrade. See [release candidate notes](BETA15_RELEASE_NOTES.md).
+The published beta.14 has a known observability gap: `/mcp` and the host may work even if the Core cannot resolve `api.github.com` through Docker's `127.0.0.11` embedded resolver. An explicit DNS server on the same Docker network was confirmed to restore name resolution in a field test. The beta.15 upgrade installer also migrates a single explicit DNS setting from an already-running Core using a previous local Compose override; this requires invoking **the beta.15 release installer**, not the old beta.14 CLI upgrade. See [beta.15 release notes](BETA15_RELEASE_NOTES.md).
 
-**The beta.15 candidate (not yet published in a tagged release)** provides `KALI_MCP_DNS_SERVER`: an optional numeric IPv4/IPv6 upstream *for the Core container only*. The default is **empty**, preserving Docker behavior. An operator may configure the DNS from the SSH wizard or in the Control Center's Networking settings. Non-empty values are validated; loopback, multicast, unspecified and link-local addresses are rejected. No DNS server or network segment is hard-coded. Other containers, the host resolver, Docker daemon config and authorized assessment CIDRs are left unchanged.
+**The published beta.15 release** provides `KALI_MCP_DNS_SERVER`: an optional numeric IPv4/IPv6 upstream *for the Core container only*. The default is **empty**, preserving Docker behavior. An operator may configure the DNS from the SSH wizard or in the Control Center's Networking settings. Non-empty values are validated; loopback, multicast, unspecified and link-local addresses are rejected. No DNS server or network segment is hard-coded. Other containers, the host resolver, Docker daemon config and authorized assessment CIDRs are left unchanged.
 
 The canonical Compose helper `scripts/compose-hybrid.sh` applies the DNS overlay on installer activation, WebUI settings changes, Core restarts and CLI origin changes; the worker validates the Core's effective Docker DNS setting. If your DHCP lease/server changes, reassess this manually selected address.
 
@@ -182,7 +182,7 @@ sudo docker exec kali-mcp-core /opt/venv/bin/python -c \
 A `Temporary failure in name resolution` indicates DNS failure; success connecting to a numeric HTTPS address separately proves that TCP egress is available. Avoid globally editing Docker's DNS or restarting the daemon until you have determined whether other containers depend on it.
 
 
-Implemented as of beta.14: authenticated MCP transport, curated Kali registry, sandbox and approved host operations, persistent jobs, `jobs_wait`, queued/tracked-job `jobs_cancel`, NetworkManager status/scan, file transfer and update tracking.
+Implemented as of beta.15: authenticated MCP transport, curated Kali registry, sandbox and approved host operations, persistent jobs, `jobs_wait`, queued/tracked-job `jobs_cancel`, NetworkManager status/scan, file transfer and update tracking.
 
 Not generally supported as complete features: Wi-Fi AP/Nexmon, Ethernet gateway/NAT with safe checkpoint rollback, generalized monitor-mode workflows, full process/cgroup containment, and advanced PCAP presentation. Cancelled jobs can leave independent daemonized descendants; interactive PTYs use `terminal_close`.
 
