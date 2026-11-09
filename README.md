@@ -2,7 +2,7 @@
 
 **A self-hosted MCP control plane for authorized security assessments with Kali Linux.** Manage Kali tools, execution jobs, network reconnaissance, MCP clients and appliance settings through an authenticated WebUI or an SSH-friendly CLI.
 
-[Latest published prerelease: v0.1.0-beta.14](https://github.com/the-code-learner/kali-mcp/releases/tag/v0.1.0-beta.14) · [Beta.15 candidate notes](docs/BETA15_RELEASE_NOTES.md) · [Beta 14 release notes](docs/BETA14_RELEASE_NOTES.md) · [Hybrid deployment guide](docs/HYBRID.md) · [Security model](docs/SECURITY.md)
+[Latest prerelease: v0.1.0-beta.15](https://github.com/the-code-learner/kali-mcp/releases/tag/v0.1.0-beta.15) · [Beta 15 release notes](docs/BETA15_RELEASE_NOTES.md) · [Beta 14 release notes](docs/BETA14_RELEASE_NOTES.md) · [Hybrid deployment guide](docs/HYBRID.md) · [Security model](docs/SECURITY.md)
 
 > **Beta software for dedicated lab/assessment systems, not a production-hardened remote-access appliance.** GitHub CI validates Linux AMD64 Docker and systemd/Docker deployments, including OAuth and Agent socket recovery. Testing on a real Raspberry Pi has informed recent fixes, but your specific Kali ARM64 installation, network interfaces and Cloudflare/Tailscale setup still need validation. Run security tests only against systems you own or are authorized to assess.
 
@@ -40,7 +40,7 @@ For a Raspberry Pi, use an SSH terminal or its local console. Download the *vers
 
 ```bash
 mkdir -p ~/kali-mcp-install && cd ~/kali-mcp-install
-TAG=v0.1.0-beta.14
+TAG=v0.1.0-beta.15
 BASE="https://github.com/the-code-learner/kali-mcp/releases/download/$TAG"
 
 curl -fL --retry 3 -o install-hybrid.sh "$BASE/install-hybrid.sh"
@@ -135,8 +135,8 @@ For a complete command list, run `sudo kali-mcp --help`. The CLI requires intera
 
 ## Updating, troubleshooting and rollback
 
-**DNS in bridged Docker networks:** if the Kali host resolves GitHub but the Core reports `Temporary failure in name resolution`, inspect Core `/etc/resolv.conf` and test a temporary container with `docker run --rm --network current_default --dns <your-host-dns-ip> ...` before changing anything. The **beta.15 release candidate** adds an optional **`KALI_MCP_DNS_SERVER`** Core-only override, configurable in the SSH wizard or Control Center; blank keeps Docker's normal resolver. It is never hard-coded to a public or site-specific DNS server. See [hybrid DNS diagnostics](docs/HYBRID.md#optional-dns-upstream-for-the-core-beta15-candidate).
-**Important for beta.14 users with a local DNS override:** when beta.15 is published, use its SHA256-verified `install-hybrid.sh --upgrade` release asset (see [migration instructions](docs/BETA15_RELEASE_NOTES.md)) rather than the old beta.14 CLI installer, which does not know how to migrate the override.
+**DNS in bridged Docker networks:** if the Kali host resolves GitHub but the Core reports `Temporary failure in name resolution`, inspect Core `/etc/resolv.conf` and test a temporary container with `docker run --rm --network current_default --dns <your-host-dns-ip> ...` before changing anything. The **beta.15 release** adds an optional **`KALI_MCP_DNS_SERVER`** Core-only override, configurable in the SSH wizard or Control Center; blank keeps Docker's normal resolver. It is never hard-coded to a public or site-specific DNS server. See [hybrid DNS diagnostics](docs/HYBRID.md#optional-dns-upstream-for-the-core-beta15).
+**Important for beta.14 users with a local DNS override:** use the published beta.15 SHA256-verified `install-hybrid.sh --upgrade` release asset (see [migration instructions](docs/BETA15_RELEASE_NOTES.md)) rather than the old beta.14 CLI installer, which does not know how to migrate the override.
 
 **Existing hybrid appliance:** use **Control Center → Updates → Check now** and apply the latest eligible beta after review, or run `sudo kali-mcp upgrade`. The versioned installer also supports `--upgrade`, `--resume` and `--repair`. Upgrades preserve configured application-superuser credentials and scope, and create a safety backup of the Core SQLite database.
 
@@ -164,6 +164,7 @@ Verified CI is **not** a guarantee of a secure production deployment. Prefer a d
 **[Complete documentation index (current guides vs. historical beta notes)](docs/README.md)**
 
 - [Hybrid installation and trust boundaries](docs/HYBRID.md)
+- [Beta 15 release notes](docs/BETA15_RELEASE_NOTES.md)
 - [Beta 14 release notes](docs/BETA14_RELEASE_NOTES.md)
 - [Cloudflare Tunnel, Access and OAuth](docs/CLOUDFLARE.md)
 - [MCP file transfers](docs/MCP_FILE_TRANSFERS.md)
