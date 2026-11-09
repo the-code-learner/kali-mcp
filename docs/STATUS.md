@@ -1,6 +1,6 @@
 # Development status — Kali MCP v0.1.0-beta.15
 
-**Latest published prerelease:** [v0.1.0-beta.15](https://github.com/the-code-learner/kali-mcp/releases/tag/v0.1.0-beta.15). See the [release notes](BETA15_RELEASE_NOTES.md). Current deployment:  native systemd Host Agent plus nonprivileged Docker Core. This is a **beta for dedicated Kali security-assessment appliances**, not a production-hardened remote-access product.
+**Latest published prerelease:** [v0.1.0-beta.15](https://github.com/the-code-learner/kali-mcp/releases/tag/v0.1.0-beta.15). See the [release notes](BETA15_RELEASE_NOTES.md). Current deployment: native systemd Host Agent plus nonprivileged Docker Core. This is a **beta for dedicated Kali security-assessment appliances**, not a production-hardened remote-access product.
 
 Status terms are deliberately distinct:
 - **Implemented:** the relevant code/API exists; not a guarantee that every host/environment was tested.
