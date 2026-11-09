@@ -1,85 +1,79 @@
-# Cloudflare Tunnel + Access + OAuth
+# Cloudflare Tunnel, Access, OAuth and browser MCP — beta.14
 
-Single public origin: https://kali.example.com
-MCP URL: https://kali.example.com/mcp
+Use **one canonical HTTPS public origin**, for example `https://mcp.example.com`, with the MCP endpoint at **`https://mcp.example.com/mcp`**. The Docker Core should continue listening privately on `127.0.0.1:8787`; Cloudflare Tunnel supplies remote HTTPS connectivity. Never expose the raw Core HTTP port on the Internet.
 
-## Access policy
-Use a default-deny Access application on the entire hostname. Create narrowly
-scoped Bypass rules only for the protocol paths below. The app enforces OAuth
-and admin consent independently from Cloudflare.
+This is an **operator configuration guide**, not proof that a particular Cloudflare zone/client works. Verify the actual policy and live OAuth flow on your deployment. Also read [HYBRID.md](HYBRID.md) and [SECURITY.md](SECURITY.md).
 
-| Path | Why it must be reachable to an MCP client |
+## Tunnel setup
+
+Run `sudo kali-mcp access` and choose **Cloudflare Tunnel**. The CLI checks for `cloudflared`, can attempt installation from a distribution package, verifies the executable and asks you to confirm the Access policy first. A remotely managed Tunnel token is entered using hidden terminal input, saved in a root-only file and used by a dedicated systemd service via `--token-file`, rather than embedding the token in process arguments.
+
+Configure the public hostname to forward to `http://127.0.0.1:8787` on the same host. Update the canonical `KALI_MCP_PUBLIC_URL` to the **HTTPS origin without `/mcp`**; the CLI may perform this after confirmation. Changes to the origin/token audience can require OAuth clients to reauthorize.
+
+Package availability and architecture-specific install details vary; if `cloudflared` is missing, follow the vendor's verified installation instructions rather than trusting arbitrary binaries.
+
+## Cloudflare Access routing
+
+Start with **default-deny administrative routes** and an Access application with appropriately strong authentication/MFA. To support public remote MCP clients that cannot present Cloudflare Access session credentials, configure carefully scoped policy exceptions for **only** the protocol routes needed by the client:
+
+| Route | Purpose |
 | --- | --- |
-| /mcp | OAuth Bearer MCP endpoint |
-| /.well-known/oauth-protected-resource | RFC 9728 discovery |
-| /.well-known/oauth-protected-resource/mcp | Path-specific RFC 9728 discovery |
-| /.well-known/oauth-authorization-server | RFC 8414 metadata |
-| /register | Dynamic public-client registration |
-| /token | OAuth code and refresh exchange |
-| /authorize | Interactive OAuth authorization entry |
+| `/mcp` | Authenticated streamable HTTP MCP resource |
+| `/.well-known/oauth-protected-resource` | Protected-resource metadata |
+| `/.well-known/oauth-protected-resource/mcp` | MCP-specific protected-resource metadata |
+| `/.well-known/oauth-authorization-server` | OAuth server discovery |
+| `/register` | Dynamic public client registration |
+| `/token` | OAuth authorization-code/refresh-token exchange |
+| `/authorize` | Interactive authorization and consent entry |
 
-Do NOT bypass /, /login, /logout, /api/v1/* or /static/*.
-Browsers using /authorize redirect to /login and must pass Cloudflare Access
-and a separate Kali MCP administrator login before authorizing a client.
+**Do not exempt** the general dashboard (`/`), `/login`, `/logout`, `/api/v1/*`, `/settings/deployment`, `/jobs/*` or `/static/*` as a group. OAuth `/authorize` can redirect a browser to the protected `/login` page; you must test that the browser can satisfy both Cloudflare Access and Kali MCP's independent superuser/consent step.
 
-## Hardening requirements
-- Bind Docker port 8787 to 127.0.0.1 when using cloudflared on the same Pi.
-- Never route the raw Docker port directly from the public Internet.
-- Set KALI_MCP_PUBLIC_URL consistently to the canonical HTTPS origin.
-- Apply Cloudflare rate limits to /register, /token and /authorize.
-- Keep the admin password private and never commit it to this repository.
-- Require OAuth PKCE S256, exact redirect URI checks, token audience binding,
-  hashed tokens, single-use authorization codes and refresh-token rotation.
-- Validate real-world interoperability with ChatGPT and other supported clients.
-- A successful OAuth connection does not itself enable host or root execution.
+Cloudflare bypass of the transport routes is **not bypass of Kali MCP authentication**: `/mcp` still requires a valid resource-bound OAuth Bearer token or enabled API token. Apply tight request/rate limits to registration and token endpoints and verify the exact Access path matching behavior in your zone.
 
-Cloudflare path precedence and this deployment's OAuth login callback behavior
-must be integration-tested before public exposure.
+### Optional OpenLink file transfers
 
-## API tokens + llama.cpp browser integration (beta.8)
+If using signed one-time `files_upload` / `files_download` URLs, the client must also reach `/files/openlink/*` with HTTP **PUT** or **GET**. Cloudflare Access login redirects can break raw uploads/downloads; a narrowly scoped exception for this path may be needed. **These URLs are bearer-like credentials**: use short lifetimes, avoid logging them and never exempt the entire dashboard or wildcard all paths. Cloudflare plan upload size/time limits may be below Kali MCP's 100 MB/file limit; Base64 chunks are an alternative. See [MCP_FILE_TRANSFERS.md](MCP_FILE_TRANSFERS.md).
 
-OAuth Authorization Code + PKCE S256 is preserved for interactive clients;
-self-contained API tokens are an **additional** credential type on the SAME `/mcp` endpoint.
-Only bypass Cloudflare Access for protocol routes in the table above.
-Do not bypass `/api/v1/api-tokens/*`, `/login`, `/logout`, or the dashboard.
+## OAuth clients and API tokens
 
-- Create a 30-day API token under **Dashboard → MCP Clients → API Tokens**.
-  Confirm the current superuser password and copy the token immediately.
-- In beta.8 and later, open **Dashboard → MCP Browser Origins / CORS**,
-  authorize the exact HTTPS origin (such as
-  `https://llm.davidecasalin.it`) with superuser confirmation, and
-  verify **Active in Core** matches **Saved on Host** after the controlled
-  Core-only restart. This stores the allowlist in both protected environment
-  files, performs a health check and attempts rollback on failure; no SSH
-  editing or extra container is required.
-- Creating a browser API Token does **not** grant CORS access. Grant the
-  browser origin first; keep the token separate and private.
-- Optionally use **Check CORS** on the dashboard. An OPTIONS response of
-  HTTP 204 is insufficient to prove MCP works: with a valid Bearer token,
-  the check also exercises `POST initialize` and `tools/list` with the
-  **portless public Host header**. Without a token, Host/MCP checks are
-  intentionally reported as not tested.
-- Only exact HTTPS origins are permitted (localhost HTTP is allowed for
-  local development). Never set a wildcard or disable DNS-rebinding checks.
-- In llama.cpp WebUI set MCP URL `https://kali-mcp.warebench.com/mcp`,
-  transport `streamable_http`, and use `Authorization: Bearer <one-time-token>`.
-  Alternatively, use `X-Kali-MCP-API-Key: <one-time-token>`.
-  For direct browser calls, set **Use llama-server proxy = OFF**.
-- With llama-server `/cors-proxy`, set **Use llama-server proxy = ON**.
-  Keep any Nginx Basic Auth on the LLM hostname separate from the MCP
-  credential. The browser proxy should forward MCP Bearer using
-  `x-llama-server-proxy-header-authorization` and must NEVER forward
-  upstream Nginx Basic credentials to Kali.
-- Allow `OPTIONS /mcp` on the edge; only origins in the exact allowlist
-  receive CORS preflight/response headers. Administrative routes are not CORS enabled.
+**Interactive MCP clients** use OAuth authorization-code + PKCE S256, including browser consent. Register via the supported metadata/DCR flow, complete WebUI superuser approval and connect to the canonical `https://mcp.example.com/mcp` resource.
 
-Browser-side llama.cpp may persist MCP tokens in its browser profile.
-Use short-lived, dedicated, revocable keys and prefer a tool allowlist for
-read-only workflows. Bearer or custom-header tokens never grant root/host
-capabilities: existing deployment ceilings and Host Agent toggles still govern
-them. Revocation takes effect immediately; password rotation invalidates API
-tokens bound to the previous superuser fingerprint.
+**API tokens** are a separate, revocable credential type. Create them through **Control Center → MCP Clients → API Tokens** (fresh superuser confirmation), or from the SSH CLI. Copy the token once, store it securely and consider a per-token tool allowlist. Use one of these client request headers where supported:
 
-Rotate API keys with the **Rotate** action in the WebUI, or use the
-superuser-authenticated CLI `sudo /usr/local/bin/kali-mcp api-token-rotate <token_id>`.
-The old key is invalidated immediately and only the replacement secret is shown.
+```text
+Authorization: Bearer <api-token>
+X-Kali-MCP-API-Key: <api-token>
+```
+
+Do **not** send both credential forms in the same request. The custom API key header can be disabled by setting `KALI_MCP_API_HEADER_ENABLED=false`; ordinary Bearer authentication remains available. Neither API tokens nor OAuth consent enable privileged host/root capabilities by themselves.
+
+Revoke or rotate API tokens through Control Center or `sudo kali-mcp api-token-rotate <token-id>`. Keep separate keys per client and do not confuse upstream LLM-provider credentials, Nginx Basic Auth and Kali MCP Bearer credentials.
+
+## Browser-based clients (e.g., llama.cpp WebUI)
+
+When a browser makes direct cross-origin MCP calls:
+
+1. In **Control Center → MCP Browser Origins / CORS**, allow only the exact browser origin, for example `https://llm.example.com`. Wildcards are not supported; localhost HTTP is reserved for local development.
+2. Wait for the controlled settings deployment and Core restart; verify that the saved Host value is **active in the Core**. The presence of an entry in an editor is not proof it has applied.
+3. Set the MCP URL to `https://mcp.example.com/mcp`, choose streamable HTTP, and pass the correct **Kali MCP** credential in the client.
+4. Allow the edge to handle **`OPTIONS /mcp`**. An HTTP 204 CORS preflight is useful but **insufficient**; also test authenticated `POST initialize` and `tools/list` with the actual public **Host** header.
+5. For direct browser fetches, configure the client to avoid unnecessary intermediary proxies. For a client-side/LLM-server proxy, ensure only intended Kali MCP credentials are forwarded to Kali, not credentials for the LLM interface's own Nginx/Basic Auth.
+
+The Core enforces the Host/Origin checks and the precise origin allowlist. Administrative APIs do **not** become cross-origin public APIs. A browser API token does **not** automatically grant CORS; register the browser origin separately.
+
+Browser profiles and proxy logs can expose stored API tokens to local administrators or other applications. Prefer dedicated, short-lived, revocable credentials and do not paste them into screenshots or reports.
+
+## Troubleshooting checklist
+
+- **401 from `/mcp`:** confirm the bearer is valid, unexpired, intended for the current canonical resource URL, and not revoked; check API-token enablement for custom headers.
+- **Invalid Host header:** confirm `KALI_MCP_PUBLIC_URL` matches the actual public hostname, with no path and the correct scheme; do not disable DNS-rebinding checks to suppress the error.
+- **Browser CORS failure:** check the exact origin (scheme + hostname + port), that the Core reports it as active, and the proxy's `OPTIONS` forwarding.
+- **Cloudflare Access redirect:** compare the path and browser/client class against your Access application rules; protect all unrelated administrative paths.
+- **Tunnel reaches UI but MCP fails:** test actual OAuth discovery, registration/consent, token exchange and authenticated `tools/list`; a green `/healthz` is not a complete MCP smoke test.
+- **OpenLink fails:** check signed URL expiry/one-time consumption, PUT/GET forwarding and Cloudflare body/time limits.
+
+For a local/private alternative, **Tailscale Serve** is limited to the tailnet by default; hosted clients outside that tailnet cannot connect without another supported gateway. The access assistant does not automatically enable Funnel.
+
+## Security reminder
+
+Access/MFA, HTTPS, WAF/rate limits, strong superuser credentials, scoped/revocable API tokens and host-level firewall policies are complementary controls. Root execution is independently gated and can still compromise the entire appliance if deliberately enabled. The authorized target CIDR scope is an administrator choice, not a universal egress firewall.
