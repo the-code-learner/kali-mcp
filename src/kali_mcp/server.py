@@ -26,7 +26,10 @@ mcp = MCPServer(
         "assessment scopes. Execution, package installs, network changes and "
         "host root access are controlled by deployment ceilings and WebUI "
         "administrator toggles. Tools return job IDs; use jobs_get to retrieve "
-        "results and execution logs. An OAuth login never implies root approval."
+        "results and execution logs. Prefer bounded jobs_wait to frequent jobs_get "
+        "polling. Distinguish passive observation from active scans, and mark "
+        "unverified exploitability as a hypothesis. An OAuth login never implies "
+        "root approval."
     ),
 )
 
@@ -196,8 +199,17 @@ def jobs_get(job_id: str) -> dict:
 
 
 @mcp.tool()
+def jobs_wait(job_id: str, timeout: int = 15) -> dict:
+    """Wait up to 30 seconds for an owned job to finish; reduces polling chatter."""
+    record = store.get_job(job_id)
+    if not record or record["actor"] != actor():
+        return {"ok": False, "error": "Unknown job"}
+    return safe_call(jobs.wait, job_id, timeout)
+
+
+@mcp.tool()
 def jobs_cancel(job_id: str) -> dict:
-    """Request cancellation. Returns unavailable until broker process-tree cancellation lands."""
+    """Cancel queued jobs or request termination of a running job's process group."""
     record = store.get_job(job_id)
     if not record or record["actor"] != actor():
         return {"ok": False, "error": "Unknown job"}
@@ -208,6 +220,9 @@ def jobs_cancel(job_id: str) -> dict:
 def network_manage(action: str, interface: str = "wlan0") -> dict:
     """Network status / Wi-Fi scan / disconnect. Changes obey admin and YAML gates."""
     def compute():
+        action = action.strip().lower()
+        if action == "wifi_scan":
+            action = "scan"  # documented read-only alias for agent discovery
         if action not in {"status", "scan", "disconnect"}:
             raise ValueError("Unknown or not-yet-implemented network action")
         if action == "disconnect":
