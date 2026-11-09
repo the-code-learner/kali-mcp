@@ -90,6 +90,24 @@ jobs:
           sudo test -f /etc/kali-mcp/config.ready
           sudo test -f /var/log/kali-mcp/install.log
           test "$(docker inspect --format '{{.State.Health.Status}}' kali-mcp-core)" = healthy
+      - name: Build versioned release assets and SHA256 manifest
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "0.1.0-beta.15"
+          test -s docs/BETA15_RELEASE_NOTES.md
+          cp scripts/install-hybrid.sh install-hybrid.sh
+          sha256sum install-hybrid.sh kali-mcp-hybrid.yml > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - name: Attach validated prerelease assets to workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: kali-mcp-beta15-release-assets
+          retention-days: 30
+          path: |
+            install-hybrid.sh
+            kali-mcp-hybrid.yml
+            SHA256SUMS
+            docs/BETA15_RELEASE_NOTES.md
       - name: Diagnostics on failure
         if: failure()
         run: |
