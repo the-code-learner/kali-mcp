@@ -386,7 +386,9 @@ async def health(request: Request):
 async def lifespan_check():
     while True:
         await asyncio.to_thread(core.updates.check)
-        await asyncio.sleep(cfg.check_interval)
+        # The normal interval can be 6 hours; do not cache a DNS outage that
+        # long after network recovery. Failed checks back off 30..300 seconds.
+        await asyncio.sleep(max(1, core.updates.retry_in_seconds()))
 
 
 @contextlib.asynccontextmanager
