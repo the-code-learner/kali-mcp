@@ -510,7 +510,7 @@ async function postLive(path, form, options={}){
      if(response.headers.get('content-type')?.includes('application/json')){
        try{msg=JSON.parse(text).error||msg;}catch(e){}
      }
-     toast('Modifica non applicata: '+msg,'bad');
+     toast((path==='/api/v1/updates/check'?'Verifica release non riuscita: ':'Modifica non applicata: ')+msg,'bad');
      return null;
    }
    if(wantsJSON){
