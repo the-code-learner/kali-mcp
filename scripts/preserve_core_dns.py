@@ -12,9 +12,11 @@ from pathlib import Path
 import subprocess
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src"))
 from kali_mcp.deployment_settings import normalize_dns_server
-from wizard import parse_env, write_private
+from scripts.wizard import parse_env, write_private
 
 
 def migrate(config: Path, *, dns: str | None = None) -> bool:
