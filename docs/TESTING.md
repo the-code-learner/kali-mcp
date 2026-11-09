@@ -1,6 +1,6 @@
 # Developer and hardware validation — Kali MCP beta.14
 
-This checklist is for the **hybrid systemd Host Agent + unprivileged Docker Core** installation. It separates automated Linux AMD64 coverage from the tests still needed on physical ARM64 devices. Work only within an authorized lab and do not enable privileged operations merely to satisfy a smoke check.
+This checklist is for the **hybrid systemd Host Agent + unprivileged Docker Core** installation. The beta.15 candidate additionally tests automatic failed-release-check retries, Core-only DNS selection and beta.14 DNS override migration. It separates automated Linux AMD64 coverage from the tests still needed on physical ARM64 devices. Work only within an authorized lab and do not enable privileged operations merely to satisfy a smoke check.
 
 ## Local source validation (Python 3.12+)
 
