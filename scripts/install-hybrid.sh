@@ -281,6 +281,52 @@ else
   echo 'Reusing committed settings. Use --reconfigure to run the wizard.'
 fi
 "${VERIFY[@]}" || { echo 'Wizard did not produce a complete configuration' >&2; exit 1; }
+# Preserve an explicitly selected Docker DNS override on upgrade from an older
+# beta that used a local Compose override file. Detect the running Core's
+# HostConfig.Dns; do not pin the site's DNS, touch Docker's global settings,
+# or replace a nonempty committed DNS choice.
+if test "$UPGRADE" = true; then
+  python3 - "$TARGET" "$CONFIG" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+stage, config = (Path(value) for value in sys.argv[1:])
+sys.path.insert(0, str(stage))
+sys.path.insert(0, str(stage / "src"))
+from kali_mcp.deployment_settings import normalize_dns_server
+from scripts.wizard import parse_env, write_private
+
+stack = config / "stack.env"
+values = parse_env(stack)
+if not values.get("KALI_MCP_DNS_SERVER"):
+    check = subprocess.run(
+        ["docker", "inspect", "--format", "{{json .HostConfig.Dns}}",
+         "kali-mcp-core"], capture_output=True, text=True)
+    if check.returncode == 0:
+        try:
+            configured = json.loads(check.stdout)
+            resolver = configured[0] if isinstance(configured, list) and len(configured) == 1 else ""
+            validated = normalize_dns_server(resolver)
+        except (ValueError, TypeError):
+            validated = ""
+        if validated:
+            for name in ("stack.env", "agent.env"):
+                file = config / name
+                content = file.read_text(encoding="utf-8")
+                records = content.splitlines()
+                replaced = False
+                for i, line in enumerate(records):
+                    if line.startswith("KALI_MCP_DNS_SERVER="):
+                        records[i] = "KALI_MCP_DNS_SERVER=" + validated
+                        replaced = True
+                if not replaced:
+                    records.append("KALI_MCP_DNS_SERVER=" + validated)
+                write_private(file, "\n".join(records) + "\n")
+            print("Preserved existing Core-only DNS override for hybrid upgrade")
+PY
+fi
+"${VERIFY[@]}" || { echo 'DNS configuration migration failed validation' >&2; exit 1; }
 chmod 0600 "$CONFIG"/*.env "$CONFIG/superuser.json" "$CONFIG/config.ready"
 phase credentials
 # Keep the canonical superuser hash root-only. Core receives an immutable,
