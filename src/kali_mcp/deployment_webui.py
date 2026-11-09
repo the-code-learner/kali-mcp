@@ -75,7 +75,9 @@ def render_page(request, inventory: dict) -> HTMLResponse:
                             '>true</option></select>')
             else:
                 selector = ('<input name="value" maxlength="255" value="' +
-                            _esc(raw) + '" required spellcheck="false">')
+                            _esc(raw) + '"' +
+                            ('' if field.get("type") == "dns_server" else ' required') +
+                            ' spellcheck="false">')
             confirmation = ('<label>Confirmation<input name="confirm" '
                             'placeholder="ENABLE ROOT"></label>'
                             if key in {"KALI_MCP_ALLOW_HOST_ROOT",
